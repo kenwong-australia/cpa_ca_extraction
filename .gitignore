@@ -1,0 +1,27 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Env / secrets
+.env
+.env.*
+
+# Playwright
+playwright/.auth/
+
+# Outputs (keep seeds.example.csv tracked; ignore real seed copies if you name them this way)
+data/seeds.csv
+data/*.output.csv
+data/cpa_contacts*.csv
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
