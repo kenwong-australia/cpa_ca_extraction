@@ -29,4 +29,4 @@ python -m playwright install chromium
 
 echo ""
 echo "Setup finished. Run the scraper without manual activate, e.g.:"
-echo "  ./run_scraper.sh run --site cpa_au --out data/test.csv --limit 1"
+echo "  ./run_scraper.sh run --site cpa_au --out \"data/run_\$(date +%Y%m%d_%H%M).csv\" --limit 1"
