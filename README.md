@@ -25,7 +25,7 @@ If `PLAYWRIGHT_BROWSERS_PATH` points at a cache from another machine or architec
 ### Helper scripts (macOS / Linux)
 
 - **`scripts/setup.sh`** — creates `.venv` if missing, then `pip install -e .` and Playwright Chromium.
-- **`run_scraper.sh`** — runs `python -m scraper` using that `.venv` so you do not have to `source .venv/bin/activate` yourself.
+- **`run_scraper.sh`** — runs `python -m scraper` using that `.venv`. For subcommand **`run`**, it adds **`--headed`** by default so Chromium opens on your screen (good for testing). For **headless** runs: `CPA_SCRAPER_HEADLESS=1 ./run_scraper.sh run …` or use `python -m scraper run …` with the venv activated and no `--headed`.
 
 #### From a new terminal to a finished scrape (copy-paste)
 
@@ -42,7 +42,7 @@ chmod +x scripts/setup.sh run_scraper.sh 2>/dev/null || true
 ./run_scraper.sh run --site cpa_au --out "data/run_$(date +%Y%m%d_%H%M).csv" --limit 1
 ```
 
-This block is **not** a different app: `[[ -d .venv ]] || ./scripts/setup.sh` runs **`scripts/setup.sh`** only when `.venv` is missing (same steps as **Manual setup**). **`run_scraper.sh`** is a thin wrapper around **`python -m scraper`** using that `.venv`.
+This block is **not** a different app: `[[ -d .venv ]] || ./scripts/setup.sh` runs **`scripts/setup.sh`** only when `.venv` is missing (same steps as **Manual setup**). **`run_scraper.sh`** wraps **`python -m scraper`** and turns on **visible browser** for `run` (see bullet above).
 
 After the last line, you should see `Wrote 1 row(s) to …/data/run_….csv`. For more rows, change `--limit` or remove it for the full list (slow). To refresh dependencies later, run `./scripts/setup.sh` again.
 
@@ -52,7 +52,8 @@ By default, **`cpa_au` scrapes every practice row** for the chosen `--location` 
 
 ```bash
 ./run_scraper.sh run --site cpa_au --out data/run.csv
-# Or, with venv activated: python -m scraper run --site cpa_au --out data/run.csv
+# Headless (no window): CPA_SCRAPER_HEADLESS=1 ./run_scraper.sh run --site cpa_au --out data/run.csv
+# Or with venv activated: python -m scraper run --site cpa_au --out data/run.csv   # add --headed to see browser
 ```
 
 Between rows, the scraper waits a **uniform random 5–15 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
@@ -65,7 +66,7 @@ Between rows, the scraper waits a **uniform random 5–15 seconds** (implementat
 - `--max-consecutive-failures` — abort after this many **consecutive** row failures (default: `10`, §3.2)
 - `--max-search-retries` — retries for the initial search / Places step (default: `3`, §3.2)
 - `--wall-clock-seconds S` — stop after **S** seconds (optional, §3.2)
-- `--headed` — show the browser (default is headless)
+- `--headed` — show the browser (`python -m scraper` default is headless; **`./run_scraper.sh run` adds this for you** unless `CPA_SCRAPER_HEADLESS=1`)
 
 The CPA UI’s **Find** control is driven with a DOM `click()` so the portal handler runs reliably in headless Chromium.
 
