@@ -13,16 +13,24 @@ playwright install chromium
 
 If `PLAYWRIGHT_BROWSERS_PATH` points at a cache from another machine or architecture, either clear it or run installs with `env -u PLAYWRIGHT_BROWSERS_PATH playwright install chromium`.
 
-## Phase 1 — one row (vertical slice)
+## Phase 2 — full result list (one search)
+
+By default, **`cpa_au` scrapes every practice row** for the chosen `--location` (one search, many CSV rows).
 
 ```bash
 python -m scraper run --site cpa_au --out data/run.csv
 ```
 
-Options:
+Between rows, the scraper waits a **uniform random 5–15 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
+
+### Options
 
 - `--location` — string typed into Google Places (default: `Sydney NSW, Australia`)
 - `--seed` — value stored in CSV `search_seed` for provenance (default: `Sydney,NSW,2000`)
+- `--limit N` — scrape at most **N** rows (e.g. `--limit 1` for a Phase‑1-style smoke test)
+- `--max-consecutive-failures` — abort after this many **consecutive** row failures (default: `10`, §3.2)
+- `--max-search-retries` — retries for the initial search / Places step (default: `3`, §3.2)
+- `--wall-clock-seconds S` — stop after **S** seconds (optional, §3.2)
 - `--headed` — show the browser (default is headless)
 
 The CPA UI’s **Find** control is driven with a DOM `click()` so the portal handler runs reliably in headless Chromium.
@@ -35,4 +43,4 @@ When you run **`python -m scraper`**, Playwright already **grants geolocation** 
 
 If the red line **“You can only search for either Australian or New Zealand address.”** appears while typing manually, it usually means the field does not yet have a **confirmed Google Places** value: pick a suggestion from the dropdown (keyboard or click), then try **FIND A CPA** again.
 
-After Phase 1, extend to full result lists (Phase 2) using the same module.
+Phase 3 will add multi-location seeds and dedupe across runs.

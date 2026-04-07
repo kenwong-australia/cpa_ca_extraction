@@ -21,19 +21,32 @@ def _cmd_run(args: argparse.Namespace) -> int:
     out = Path(args.out).resolve()
     runner = SITE_REGISTRY[site]
 
+    wall_clock = args.wall_clock_seconds
+    if wall_clock is not None and wall_clock <= 0:
+        print("--wall-clock-seconds must be positive", file=sys.stderr)
+        return 2
+    if args.limit is not None and args.limit < 1:
+        print("--limit must be >= 1 when set", file=sys.stderr)
+        return 2
+
     with sync_playwright() as p:
         browser, _ctx, page = new_browser_context(p, headless=not args.headed)
         try:
-            runner(
+            rows = runner(
                 page,
                 out,
                 location_query=args.location,
                 search_seed=args.seed,
+                limit=args.limit,
+                max_consecutive_failures=args.max_consecutive_failures,
+                max_search_retries=args.max_search_retries,
+                wall_clock_seconds=wall_clock,
             )
         finally:
             browser.close()
 
-    print(f"Wrote 1 row to {out}")
+    n = len(rows)
+    print(f"Wrote {n} row(s) to {out}")
     return 0
 
 
@@ -53,6 +66,32 @@ def main(argv: list[str] | None = None) -> int:
         "--seed",
         default="Sydney,NSW,2000",
         help="Provenance label stored in CSV search_seed (default: Sydney,NSW,2000)",
+    )
+    run_p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Scrape at most N rows (default: all rows for this search)",
+    )
+    run_p.add_argument(
+        "--max-consecutive-failures",
+        type=int,
+        default=10,
+        help="Abort after this many row failures in a row (default: 10)",
+    )
+    run_p.add_argument(
+        "--max-search-retries",
+        type=int,
+        default=3,
+        help="Retries for the initial search/autocomplete step (default: 3)",
+    )
+    run_p.add_argument(
+        "--wall-clock-seconds",
+        type=float,
+        default=None,
+        metavar="S",
+        help="Stop cleanly after S seconds (optional)",
     )
     run_p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
     run_p.set_defaults(func=_cmd_run)

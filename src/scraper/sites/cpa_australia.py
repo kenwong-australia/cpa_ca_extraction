@@ -1,4 +1,4 @@
-"""CPA Australia — Find a CPA (Playwright). Phase 1: one location, one listing, one CSV row."""
+"""CPA Australia — Find a CPA (Playwright). Phase 1: one row; Phase 2: full list + §3.1 / §3.2."""
 
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-from playwright.sync_api import Page, Response
+from playwright.sync_api import Locator, Page, Response
 
 from scraper.core.csv_sink import append_contact_row
 from scraper.core.dedupe import dedupe_key_normalised
+from scraper.core.delays import sleep_random
 from scraper.core.models import ContactRecord, RunContext
+from scraper.core.safety import SafetyBrakes
 
 FIND_A_CPA_URL = "https://apps.cpaaustralia.com.au/find-a-cpa/"
 
@@ -193,9 +195,7 @@ def _set_location_via_places(page: Page, location_query: str) -> None:
     page.wait_for_timeout(300)
 
 
-def _capture_findacpa_lists(page: Page) -> list[list[dict[str, Any]]]:
-    buckets: list[list[dict[str, Any]]] = []
-
+def _register_findacpa_capture(page: Page, buckets: list[list[dict[str, Any]]]) -> None:
     def on_response(response: Response) -> None:
         try:
             if response.request.method != "GET":
@@ -225,26 +225,34 @@ def _capture_findacpa_lists(page: Page) -> list[list[dict[str, Any]]]:
             return
 
     page.on("response", on_response)
-    return buckets
 
 
-def run_phase1_vertical_slice(
+def _practice_items(page: Page) -> Locator:
+    return page.get_by_role("listitem").filter(has_text=re.compile(r"\d+\.\d+\s*km"))
+
+
+def _selected_place_label(page: Page, location_query: str) -> str:
+    try:
+        h = page.get_by_role("heading", name=re.compile(re.escape(location_query.split(",")[0]), re.I))
+        if h.count():
+            return h.first.inner_text().strip()
+    except Exception:
+        pass
+    try:
+        return page.locator("h3").first.inner_text(timeout=3_000).strip()
+    except Exception:
+        return location_query
+
+
+def _run_search_flow(
     page: Page,
-    out_csv: Path,
-    *,
-    location_query: str = "Sydney NSW, Australia",
-    search_seed: str = "Sydney,NSW,2000",
-) -> ContactRecord:
-    """
-    Search one place, open the first practice row, merge wire/DOM fields, append one CSV row.
-    """
-    ctx = RunContext.now(
-        site_id="cpa_au",
-        search_seed=search_seed,
-        search_query=location_query,
-    )
-
-    buckets = _capture_findacpa_lists(page)
+    buckets: list[list[dict[str, Any]]],
+    location_query: str,
+    search_seed: str,
+    brakes: SafetyBrakes,
+) -> tuple[RunContext, str, list[dict[str, Any]]]:
+    """One attempt: load site, search, wait for results. Mutates buckets (cleared by caller)."""
+    brakes.check_wall_clock()
     page.goto(FIND_A_CPA_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(4_000)
     _ensure_country_australia(page)
@@ -252,12 +260,9 @@ def run_phase1_vertical_slice(
 
     find_btn = page.get_by_role("button", name=re.compile(r"FIND A CPA", re.I))
     find_btn.wait_for(state="visible", timeout=30_000)
-    # Native Playwright click often misses the PCF handler; DOM click reaches it reliably.
     find_btn.evaluate("el => el.click()")
 
-    practice_hint = page.get_by_role("listitem").filter(
-        has_text=re.compile(r"\d+\.\d+\s*km"),
-    )
+    practice_hint = _practice_items(page)
     modify_btn = page.get_by_role("button", name=re.compile(r"Modify Search", re.I))
     modify_btn.or_(practice_hint.first).wait_for(state="visible", timeout=90_000)
 
@@ -267,44 +272,37 @@ def run_phase1_vertical_slice(
             "Retry with --headed or a more specific --location string.",
         )
 
-    selected_label = ""
-    try:
-        h = page.get_by_role("heading", name=re.compile(re.escape(location_query.split(",")[0]), re.I))
-        if h.count():
-            selected_label = h.first.inner_text().strip()
-    except Exception:
-        pass
-    if not selected_label:
-        try:
-            selected_label = page.locator("h3").first.inner_text(timeout=3_000).strip()
-        except Exception:
-            selected_label = location_query
-
+    selected_label = _selected_place_label(page, location_query)
+    ctx = RunContext.now(
+        site_id="cpa_au",
+        search_seed=search_seed,
+        search_query=location_query,
+    )
     ctx.selected_place_label = selected_label
 
-    practice_row = page.get_by_role("listitem").filter(
-        has_text=re.compile(r"\d+\.\d+\s*km"),
-    ).first
-    practice_row.wait_for(state="visible", timeout=60_000)
-
-    list_preview = ""
-    try:
-        list_preview = practice_row.inner_text().strip()
-    except Exception:
-        pass
-
     api_rows = max(buckets, key=len) if buckets else []
+    return ctx, selected_label, api_rows
+
+
+def _click_back_to_results(page: Page) -> None:
+    back = page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I))
+    back.wait_for(state="visible", timeout=30_000)
+    back.evaluate("el => el.click()")
+    _practice_items(page).first.wait_for(state="visible", timeout=30_000)
+
+
+def _append_row_for_listing(
+    ctx: RunContext,
+    out_csv: Path,
+    *,
+    list_preview: str,
+    api_rows: list[dict[str, Any]],
+    d_phone: str,
+    d_email: str,
+    d_web: str,
+) -> ContactRecord:
     api0 = _best_account_row(api_rows, list_preview) if api_rows else {}
     api_fields = _fields_from_account_row(api0) if api0 else {}
-
-    practice_row.evaluate("el => el.click()")
-
-    page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I)).wait_for(
-        state="visible",
-        timeout=30_000,
-    )
-
-    d_phone, d_email, d_web = _detail_links(page)
 
     company = api_fields.get("company_name") or ""
     address = api_fields.get("address") or ""
@@ -340,7 +338,7 @@ def run_phase1_vertical_slice(
         phone=phone,
         email=email,
         website=website,
-        selected_place_label=selected_label,
+        selected_place_label=ctx.selected_place_label,
         listing_id=listing_id,
         listing_url="",
         raw_listing_token=raw_token,
@@ -349,6 +347,142 @@ def run_phase1_vertical_slice(
     )
     append_contact_row(out_csv, record)
     return record
+
+
+def _scrape_open_detail(
+    page: Page,
+    ctx: RunContext,
+    out_csv: Path,
+    practice_row: Locator,
+    api_rows: list[dict[str, Any]],
+) -> ContactRecord:
+    practice_row.wait_for(state="visible", timeout=60_000)
+    try:
+        practice_row.scroll_into_view_if_needed()
+    except Exception:
+        pass
+
+    list_preview = ""
+    try:
+        list_preview = practice_row.inner_text().strip()
+    except Exception:
+        pass
+
+    practice_row.evaluate("el => el.click()")
+
+    page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I)).wait_for(
+        state="visible",
+        timeout=30_000,
+    )
+
+    d_phone, d_email, d_web = _detail_links(page)
+    return _append_row_for_listing(
+        ctx,
+        out_csv,
+        list_preview=list_preview,
+        api_rows=api_rows,
+        d_phone=d_phone,
+        d_email=d_email,
+        d_web=d_web,
+    )
+
+
+def run_cpa_au(
+    page: Page,
+    out_csv: Path,
+    *,
+    location_query: str,
+    search_seed: str,
+    limit: int | None = None,
+    brakes: SafetyBrakes | None = None,
+) -> list[ContactRecord]:
+    """
+    Search one location; scrape one row (limit=1) or every practice row (limit=None).
+
+    Between rows: §3.1 random 5–15 s after returning to the list. Uses §3.2 safety brakes.
+    """
+    brakes = brakes or SafetyBrakes()
+    buckets: list[list[dict[str, Any]]] = []
+    _register_findacpa_capture(page, buckets)
+
+    last_err: BaseException | None = None
+    ctx: RunContext | None = None
+    api_rows: list[dict[str, Any]] = []
+
+    for attempt in range(brakes.max_retries_per_location):
+        buckets.clear()
+        try:
+            ctx, _selected_label, api_rows = _run_search_flow(
+                page,
+                buckets,
+                location_query,
+                search_seed,
+                brakes,
+            )
+            break
+        except BaseException as e:
+            last_err = e
+            if attempt + 1 >= brakes.max_retries_per_location:
+                raise RuntimeError(
+                    f"Search failed after {brakes.max_retries_per_location} attempt(s).",
+                ) from last_err
+    else:
+        raise RuntimeError("Search failed.") from last_err
+
+    assert ctx is not None
+    brakes.on_success()
+
+    items = _practice_items(page)
+    items.first.wait_for(state="visible", timeout=30_000)
+    n = items.count()
+    if n == 0:
+        raise RuntimeError("No practice list rows found.")
+
+    total = n if limit is None else min(n, limit)
+    records: list[ContactRecord] = []
+
+    for i in range(total):
+        brakes.check_wall_clock()
+        if i > 0:
+            sleep_random()
+
+        items = _practice_items(page)
+        row = items.nth(i)
+        try:
+            rec = _scrape_open_detail(page, ctx, out_csv, row, api_rows)
+            brakes.on_success()
+            records.append(rec)
+        except BaseException:
+            brakes.on_failure()
+            try:
+                back = page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I))
+                if back.is_visible():
+                    _click_back_to_results(page)
+            except Exception:
+                pass
+            continue
+
+        if i < total - 1:
+            _click_back_to_results(page)
+
+    return records
+
+
+def run_phase1_vertical_slice(
+    page: Page,
+    out_csv: Path,
+    *,
+    location_query: str = "Sydney NSW, Australia",
+    search_seed: str = "Sydney,NSW,2000",
+) -> ContactRecord:
+    rows = run_cpa_au(
+        page,
+        out_csv,
+        location_query=location_query,
+        search_seed=search_seed,
+        limit=1,
+    )
+    return rows[0]
 
 
 def run_cpa_au_phase1(
@@ -363,4 +497,31 @@ def run_cpa_au_phase1(
         out_csv,
         location_query=location_query,
         search_seed=search_seed,
+    )
+
+
+def run_cpa_au_cli(
+    page: Page,
+    out_csv: Path,
+    *,
+    location_query: str,
+    search_seed: str,
+    limit: int | None = None,
+    max_consecutive_failures: int = 10,
+    max_search_retries: int = 3,
+    wall_clock_seconds: float | None = None,
+) -> list[ContactRecord]:
+    """CLI entry: builds `SafetyBrakes` from flags and runs Phase 2 (or `limit=1` for one row)."""
+    brakes = SafetyBrakes(
+        max_consecutive_failures=max_consecutive_failures,
+        max_retries_per_location=max_search_retries,
+        wall_clock_budget_s=wall_clock_seconds,
+    )
+    return run_cpa_au(
+        page,
+        out_csv,
+        location_query=location_query,
+        search_seed=search_seed,
+        limit=limit,
+        brakes=brakes,
     )
