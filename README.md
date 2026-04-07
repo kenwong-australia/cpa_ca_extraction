@@ -4,21 +4,55 @@ Extract CPA practice contacts from [CPA Australia — Find a CPA](https://apps.c
 
 ## Setup
 
+**Two equivalent ways to get a working environment:**
+
+| | |
+|--|--|
+| **Manual** (below) | You create `.venv`, activate it, install packages yourself. |
+| **Scripts** ([macOS / Linux](#helper-scripts-macos--linux)) | `./scripts/setup.sh` does the same job; [`run_scraper.sh`](./run_scraper.sh) runs the scraper without activating the venv by hand. |
+
+Manual install (any OS; use your Python 3.10+):
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
-playwright install chromium
+python -m playwright install chromium
 ```
 
-If `PLAYWRIGHT_BROWSERS_PATH` points at a cache from another machine or architecture, either clear it or run installs with `env -u PLAYWRIGHT_BROWSERS_PATH playwright install chromium`.
+If `PLAYWRIGHT_BROWSERS_PATH` points at a cache from another machine or architecture, either clear it or run installs with `env -u PLAYWRIGHT_BROWSERS_PATH python -m playwright install chromium`.
+
+### Helper scripts (macOS / Linux)
+
+- **`scripts/setup.sh`** — creates `.venv` if missing, then `pip install -e .` and Playwright Chromium.
+- **`run_scraper.sh`** — runs `python -m scraper` using that `.venv` so you do not have to `source .venv/bin/activate` yourself.
+
+#### From a new terminal to a finished scrape (copy-paste)
+
+Use this when you open Terminal and still see conda **`(base)`**, or any fresh shell. **Step 1:** go to **your** clone of this repo (the folder that contains `pyproject.toml` and `run_scraper.sh`). **Step 2:** optionally leave conda base in this tab only. **Step 3:** install the environment **only if** `.venv` does not exist yet. **Step 4:** run the scraper; when it exits, open the printed CSV path.
+
+```bash
+cd /path/to/cpa_ca_extraction   # e.g. cd ~/cpa_ca_extraction — must be this project’s root
+
+conda deactivate 2>/dev/null || true   # optional; run again if your prompt still shows "(base)"
+
+chmod +x scripts/setup.sh run_scraper.sh 2>/dev/null || true
+[[ -d .venv ]] || ./scripts/setup.sh
+
+./run_scraper.sh run --site cpa_au --out "data/run_$(date +%Y%m%d_%H%M).csv" --limit 1
+```
+
+This block is **not** a different app: `[[ -d .venv ]] || ./scripts/setup.sh` runs **`scripts/setup.sh`** only when `.venv` is missing (same steps as **Manual setup**). **`run_scraper.sh`** is a thin wrapper around **`python -m scraper`** using that `.venv`.
+
+After the last line, you should see `Wrote 1 row(s) to …/data/run_….csv`. For more rows, change `--limit` or remove it for the full list (slow). To refresh dependencies later, run `./scripts/setup.sh` again.
 
 ## Phase 2 — full result list (one search)
 
 By default, **`cpa_au` scrapes every practice row** for the chosen `--location` (one search, many CSV rows).
 
 ```bash
-python -m scraper run --site cpa_au --out data/run.csv
+./run_scraper.sh run --site cpa_au --out data/run.csv
+# Or, with venv activated: python -m scraper run --site cpa_au --out data/run.csv
 ```
 
 Between rows, the scraper waits a **uniform random 5–15 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
