@@ -76,6 +76,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if args.max_locations is not None and args.max_locations < 1:
         print("--max-locations must be >= 1 when set", file=sys.stderr)
         return 2
+    if args.jitter_min_seconds < 0 or args.jitter_max_seconds < 0:
+        print("Jitter seconds must be non-negative", file=sys.stderr)
+        return 2
+    if args.jitter_min_seconds > args.jitter_max_seconds:
+        print("--jitter-min-seconds must be <= --jitter-max-seconds", file=sys.stderr)
+        return 2
 
     input_path = Path(args.input).resolve() if args.input else None
     if input_path is not None and not input_path.is_file():
@@ -154,7 +160,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         loc, seed = placements[i]
                         shared.check_wall_clock()
                         if i > 0:
-                            sleep_random()
+                            sleep_random(
+                                min_s=args.jitter_min_seconds,
+                                max_s=args.jitter_max_seconds,
+                            )
                         print(
                             f"Progress: seed {i + 1}/{total_seeds} (of seed CSV) "
                             f"search_seed={seed!r}",
@@ -169,6 +178,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 limit=args.limit,
                                 dedupe_seen=seen,
                                 brakes=shared,
+                                jitter_min_s=args.jitter_min_seconds,
+                                jitter_max_s=args.jitter_max_seconds,
                             )
                         except RateLimitedError:
                             raise
@@ -223,6 +234,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     max_consecutive_failures=args.max_consecutive_failures,
                     max_search_retries=args.max_search_retries,
                     wall_clock_seconds=wall_clock,
+                    jitter_min_s=args.jitter_min_seconds,
+                    jitter_max_s=args.jitter_max_seconds,
                 )
         except RateLimitedError as exc:
             print(f"\n{exc}", file=sys.stderr, flush=True)
@@ -296,6 +309,20 @@ def _main_impl(argv: list[str] | None = None) -> int:
         default=None,
         metavar="S",
         help="Stop cleanly after S seconds (optional; shared across all seeds when using --input)",
+    )
+    run_p.add_argument(
+        "--jitter-min-seconds",
+        type=float,
+        default=3.0,
+        metavar="S",
+        help="Minimum random pause between Phase 3 seeds and between listing rows (default: 3)",
+    )
+    run_p.add_argument(
+        "--jitter-max-seconds",
+        type=float,
+        default=8.0,
+        metavar="S",
+        help="Maximum for the same (default: 8)",
     )
     run_p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
     run_p.add_argument(

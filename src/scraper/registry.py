@@ -26,6 +26,8 @@ class SiteRunner(Protocol):
         wall_clock_seconds: float | None = None,
         dedupe_seen: set[str] | None = None,
         brakes: SafetyBrakes | None = None,
+        jitter_min_s: float = 3.0,
+        jitter_max_s: float = 8.0,
     ) -> list[ContactRecord]: ...
 
 

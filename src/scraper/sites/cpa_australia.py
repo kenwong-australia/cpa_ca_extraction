@@ -424,11 +424,13 @@ def run_cpa_au(
     limit: int | None = None,
     brakes: SafetyBrakes | None = None,
     dedupe_seen: set[str] | None = None,
+    jitter_min_s: float = 3.0,
+    jitter_max_s: float = 8.0,
 ) -> list[ContactRecord]:
     """
     Search one location; scrape one row (limit=1) or every practice row (limit=None).
 
-    Between rows: §3.1 random 3–8 s after returning to the list. Uses §3.2 safety brakes.
+    Between rows: §3.1 random jitter after returning to the list. Uses §3.2 safety brakes.
     """
     brakes = brakes or SafetyBrakes()
     buckets: list[list[dict[str, Any]]] = []
@@ -477,7 +479,7 @@ def run_cpa_au(
     for i in range(total):
         brakes.check_wall_clock()
         if i > 0:
-            sleep_random()
+            sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
 
         raise_if_rate_limited(page)
         items = _practice_items(page)
@@ -549,6 +551,8 @@ def run_cpa_au_cli(
     wall_clock_seconds: float | None = None,
     dedupe_seen: set[str] | None = None,
     brakes: SafetyBrakes | None = None,
+    jitter_min_s: float = 3.0,
+    jitter_max_s: float = 8.0,
 ) -> list[ContactRecord]:
     """CLI entry: builds `SafetyBrakes` from flags unless `brakes` is passed (Phase 3 multi-run)."""
     brakes = brakes or SafetyBrakes(
@@ -564,4 +568,6 @@ def run_cpa_au_cli(
         limit=limit,
         brakes=brakes,
         dedupe_seen=dedupe_seen,
+        jitter_min_s=jitter_min_s,
+        jitter_max_s=jitter_max_s,
     )
