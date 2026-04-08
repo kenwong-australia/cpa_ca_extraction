@@ -206,7 +206,8 @@ For each search location (implemented in the site module):
 - **Core contact:** `company_name`, `address`, `phone`, `email`, `website` (when present).
 - **Run metadata:** `site_id`, `run_date`, `run_timestamp_utc`, `search_seed` / `search_query`, `selected_place_label`.
 - **Identity / dedupe (§5.2):** `listing_id` (if any), `listing_url`, `raw_listing_token` (if any), `dedupe_key` (best available), `dedupe_key_normalised` (fallback for debugging/merge).
-- Filename or single rolling file per policy; **run metadata** on every row as requested.
+- **Filename:** CLI **`--out`** chooses the path. In practice, use a **datetime-stamped** name (e.g. `data/run_YYYYMMDD_HHMM.csv`) so runs do not overwrite each other and **seed checkpoints** (Phase 3) stay bound to one export file.
+- **Seed-run checkpoint sidecar:** with **`--input`**, the runner writes **`{--out basename}.seed_checkpoint.json`** beside the CSV (same directory), updated after each completed seed row; **`--fresh`** clears it. **Run metadata** on every row as requested.
 
 ---
 
@@ -233,6 +234,7 @@ cpa_ca_extraction/
         __init__.py
         browser.py             # launch / context (no CPA selectors)
         csv_sink.py            # append rows, run metadata
+        checkpoint.py          # Phase 3 seed-row checkpoint JSON (--input)
         models.py              # ContactRecord, run info
         dedupe.py              # primary + fallback keys (§5.2)
         delays.py              # random sleep 5–15 s (§3.1); overridable in Phase 4
@@ -258,23 +260,19 @@ Implement **CPA first** inside `sites/cpa_australia.py`; keep `core/` dumb and r
 1. **Phase 0:** Complete §3.0 (Network + DOM + **API vs browser verdict**); write `docs/discovery-notes.md`; note listing IDs/URLs for §5.2.  
 2. **Phase 1:** Scaffold `requirements.txt`, package layout above (minimal: `core` + `sites/cpa_australia` + CLI stub), one end-to-end row.  
 3. **Phase 2:** Full list iteration for **one** search; **§3.1** pacing between rows; **§3.2** brakes; CSV + `dedupe_key` on each row. **List UI:** no pagination / load more on current site (§6) — iterate all practice rows in the list.  
-4. **Phase 3:** Outer loop over a **seed file** (**§5.0**, **`data/seeds.example.csv`** / §5.3); reproducible autocomplete policy (**§5.1**); **skip duplicate listings** across the run using **`dedupe_key`** (and fallbacks per **§5.2**); **§3.1** jitter **between** locations after each search finishes (or after a zero-result search); optional **`max_locations`** cap (§3.2); basic logging.
+4. **Phase 3:** Outer loop over a **seed file** (**§5.0**, **`data/seeds.example.csv`** / §5.3); reproducible autocomplete policy (**§5.1**); **skip duplicate listings** across the run using **`dedupe_key`** (and fallbacks per **§5.2**); **§3.1** jitter **between** locations after each search finishes (or after a zero-result search); optional **`max_locations`** cap (§3.2); basic logging; **seed-row checkpoints** and **`--fresh`** (see §10.1).
 
-### 10.1 Readiness for Phase 3
-
-**Yes — you can start Phase 3 now** from an engineering standpoint: Phase 2 delivers one full search end-to-end with brakes, delays, and stable row metadata for dedupe.
-
-What Phase 3 still **adds** (not yet in the CLI or runner):
+### 10.1 Phase 3 CLI (implemented)
 
 | Piece | Notes |
 |-------|--------|
-| **Seed input** | e.g. `--input data/seeds.csv` (columns per template; map rows to `--location`-style query + `search_seed` provenance). |
-| **Seen-set dedupe** | Track `dedupe_key` (and optionally normalised fallback) for rows **already written this run** (or merged with an existing CSV) and skip re-emits when overlapping searches return the same practice. |
-| **Between-location delay** | Same **5–15 s** uniform random wait as §3.1 after finishing one location’s scrape (including empty result) before starting the next search. |
-| **`max_locations`** | Optional: wire `SafetyBrakes.max_locations` so one invocation processes only the first *N* seeds. |
-
-No blocker from Phase 0–2 remains except **your** seed data (licence-safe locality list when you scale beyond the example file).
+| **Seed input** | `--input path.csv` — `suburb`, `state`, optional `postcode`; maps to Places query + `search_seed`. |
+| **Seen-set dedupe** | `dedupe_key` / normalised keys already in **`--out`** or written earlier in the run are skipped. |
+| **Between-location delay** | Same **5–15 s** uniform random wait as §3.1 after each location (including empty result). |
+| **`--max-locations`** | Process only the first *N* seed rows (must match between resume attempts for a valid checkpoint). |
+| **Checkpoints** | Sidecar **`{--out}.seed_checkpoint.json`**; updated after each **successful** seed row; interactive **full vs resume** prompt when appropriate; non-TTY auto-resume; **`--fresh`** clears checkpoint; **`KeyboardInterrupt`** leaves last good checkpoint. |
+| **Progress logging** | e.g. `Progress: checkpoint i/n (seed CSV rows) search_seed=…`. |
 
 ---
 
-*Document version: Playwright committed; Phase 0 API/browser verdict; 5–15 s polite jitter; safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); extensible layout.*
+*Document version: Playwright committed; Phase 0 API/browser verdict; 5–15 s polite jitter; safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); Phase 3 checkpoints + dated `--out` convention (§7, 2026-04-08); extensible layout.*

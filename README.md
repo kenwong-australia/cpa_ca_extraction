@@ -46,14 +46,17 @@ This block is **not** a different app: `[[ -d .venv ]] || ./scripts/setup.sh` ru
 
 After the last line, you should see `Wrote 1 row(s) to …/data/run_….csv`. For more rows, change `--limit` or remove it for the full list (slow). To refresh dependencies later, run `./scripts/setup.sh` again.
 
+**Output CSV naming:** Prefer a **datetime-stamped** `--out` path (as above: `run_$(date +%Y%m%d_%H%M).csv`) so each run has its own file and checkpoints stay tied to that file. Plain names like `data/run.csv` are fine for quick tests.
+
 ## Phase 2 — full result list (one search)
 
 By default, **`cpa_au` scrapes every practice row** for the chosen `--location` (one search, many CSV rows).
 
 ```bash
-./run_scraper.sh run --site cpa_au --out data/run.csv
-# Headless (no window): CPA_SCRAPER_HEADLESS=1 ./run_scraper.sh run --site cpa_au --out data/run.csv
-# Or with venv activated: python -m scraper run --site cpa_au --out data/run.csv   # add --headed to see browser
+OUT="data/run_$(date +%Y%m%d_%H%M).csv"
+./run_scraper.sh run --site cpa_au --out "$OUT"
+# Headless (no window): CPA_SCRAPER_HEADLESS=1 ./run_scraper.sh run --site cpa_au --out "$OUT"
+# Or with venv activated: python -m scraper run --site cpa_au --out "$OUT"   # add --headed to see browser
 ```
 
 Between rows, the scraper waits a **uniform random 5–15 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
@@ -84,12 +87,22 @@ Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **
 
 - **Between locations:** same **5–15 s** random delay as between practices (§3.1).
 - **Dedupe:** rows whose `dedupe_key` (or normalised fallback) was **already in the output file** or written earlier in this run are skipped (no duplicate CSV lines).
+- **Progress:** each seed row logs a line such as `Progress: checkpoint 12/168 (seed CSV rows) search_seed=…`.
+- **Checkpoints:** after each **completed** seed row, progress is saved in a **sidecar file** next to your output CSV: **`{your-out}.csv.seed_checkpoint.json`** (for example `data/run_20260408_1430.csv.seed_checkpoint.json`). Re-running with the **same** `--input`, **`--out`**, and seed row count (including **`--max-locations`**) lets you resume safely.
+- **Interrupted runs (Ctrl+C):** completed seeds are already checkpointed; run the same command again to continue.
+- **Fresh run vs resume**
+  - **Resume:** run again **without** `--fresh` — on an interactive terminal you get a prompt: **`1`** = full run from seed 1 (clears checkpoint), **`2`** = resume from the last checkpoint. If stdin is **not** a TTY (scripts/CI), the tool **resumes automatically**; use **`--fresh`** there to force a full run.
+  - **Fresh run from seed 1:** add **`--fresh`** (or choose **`1`** at the prompt).
 
 ```bash
-./run_scraper.sh run --site cpa_au --out data/run.csv --input data/seeds.168.csv --max-locations 2
+OUT="data/run_$(date +%Y%m%d_%H%M).csv"
+./run_scraper.sh run --site cpa_au --out "$OUT" --input data/seeds.168.csv --max-locations 2
+# Same command later to resume (same $OUT path), or add --fresh to restart from seed 1
 ```
 
-`--limit` applies **per location**. `--wall-clock-seconds` applies to the **whole** multi-location run. Omit `--max-locations` to process every seed row.
+`--limit` applies **per location**. `--wall-clock-seconds` applies to the **whole** multi-location run. Omit `--max-locations` to process every seed row. **`--fresh`** (Phase 3 only) resets the seed checkpoint as described above.
+
+**Tip:** Keep the same **`--out`** path across resume attempts so the CSV and **`*.seed_checkpoint.json`** stay paired. If you use a new datetime in the filename each time, each run is a separate file with no inherited checkpoint (by design).
 
 ## Repository
 
