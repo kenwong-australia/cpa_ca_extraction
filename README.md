@@ -90,3 +90,7 @@ Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **
 ```
 
 `--limit` applies **per location**. `--wall-clock-seconds` applies to the **whole** multi-location run. Omit `--max-locations` to process every seed row.
+
+## Repository
+
+Source and issues: [github.com/kenwong-australia/cpa_ca_extraction](https://github.com/kenwong-australia/cpa_ca_extraction).
