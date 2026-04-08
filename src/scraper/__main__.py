@@ -32,6 +32,16 @@ from scraper.registry import SITE_REGISTRY
 
 _SIGINT_PREV_TIME: float | None = None
 
+# Phase 3 bundle built before Playwright so checkpoint prompts do not sit behind a silent headless window.
+_Phase3PreBrowser = tuple[
+    list[tuple[str, str]],
+    set[str],
+    SafetyBrakes,
+    int,
+    Path,
+    int,
+]
+
 
 def _install_sigint_second_forces_exit():
     """Second Ctrl+C within ~2s calls os._exit(130) (Playwright can delay the first)."""
@@ -74,56 +84,69 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     rows: list = []
 
+    phase3_pre: _Phase3PreBrowser | None = None
+    if input_path is not None:
+        placements = load_seed_placements(input_path)
+        if args.max_locations is not None:
+            placements = placements[: args.max_locations]
+        if not placements:
+            print("No seed rows to process (check CSV suburb/state).", file=sys.stderr)
+            return 2
+        seen = read_existing_dedupe_keys(out)
+        shared = SafetyBrakes(
+            max_consecutive_failures=args.max_consecutive_failures,
+            max_retries_per_location=args.max_search_retries,
+            wall_clock_budget_s=wall_clock,
+        )
+        total_seeds = len(placements)
+        cp_path = checkpoint_path_for_output(out)
+        cp_state = load_seed_checkpoint(cp_path)
+        start_index = 0
+
+        if args.fresh:
+            delete_seed_checkpoint(cp_path)
+        elif cp_state is not None:
+            valid = is_checkpoint_valid_for_run(
+                cp_state,
+                input_path=input_path,
+                total_seeds=total_seeds,
+            )
+            if not valid or cp_state.next_index < 0:
+                delete_seed_checkpoint(cp_path)
+            elif cp_state.next_index >= total_seeds:
+                delete_seed_checkpoint(cp_path)
+            elif cp_state.next_index > 0:
+                if sys.stdin.isatty():
+                    if prompt_full_or_resume(
+                        completed=cp_state.next_index,
+                        total=total_seeds,
+                        next_human=cp_state.next_index + 1,
+                        checkpoint_file=cp_path,
+                    ):
+                        delete_seed_checkpoint(cp_path)
+                    else:
+                        start_index = cp_state.next_index
+                else:
+                    start_index = cp_state.next_index
+                    explain_non_interactive_resume(
+                        next_human=start_index + 1,
+                        total=total_seeds,
+                    )
+
+        phase3_pre = (placements, seen, shared, total_seeds, cp_path, start_index)
+
     with sync_playwright() as p:
+        print(
+            "Browser: headed (Chromium window should appear)"
+            if args.headed
+            else "Browser: headless (no window — use ./run_scraper.sh run … or pass --headed)",
+            file=sys.stderr,
+            flush=True,
+        )
         browser, _ctx, page = new_browser_context(p, headless=not args.headed)
         try:
-            if input_path is not None:
-                placements = load_seed_placements(input_path)
-                if args.max_locations is not None:
-                    placements = placements[: args.max_locations]
-                if not placements:
-                    print("No seed rows to process (check CSV suburb/state).", file=sys.stderr)
-                    return 2
-                seen = read_existing_dedupe_keys(out)
-                shared = SafetyBrakes(
-                    max_consecutive_failures=args.max_consecutive_failures,
-                    max_retries_per_location=args.max_search_retries,
-                    wall_clock_budget_s=wall_clock,
-                )
-                total_seeds = len(placements)
-                cp_path = checkpoint_path_for_output(out)
-                cp_state = load_seed_checkpoint(cp_path)
-                start_index = 0
-
-                if args.fresh:
-                    delete_seed_checkpoint(cp_path)
-                elif cp_state is not None:
-                    valid = is_checkpoint_valid_for_run(
-                        cp_state,
-                        input_path=input_path,
-                        total_seeds=total_seeds,
-                    )
-                    if not valid or cp_state.next_index < 0:
-                        delete_seed_checkpoint(cp_path)
-                    elif cp_state.next_index >= total_seeds:
-                        delete_seed_checkpoint(cp_path)
-                    elif cp_state.next_index > 0:
-                        if sys.stdin.isatty():
-                            if prompt_full_or_resume(
-                                completed=cp_state.next_index,
-                                total=total_seeds,
-                                next_human=cp_state.next_index + 1,
-                                checkpoint_file=cp_path,
-                            ):
-                                delete_seed_checkpoint(cp_path)
-                            else:
-                                start_index = cp_state.next_index
-                        else:
-                            start_index = cp_state.next_index
-                            explain_non_interactive_resume(
-                                next_human=start_index + 1,
-                                total=total_seeds,
-                            )
+            if phase3_pre is not None:
+                placements, seen, shared, total_seeds, cp_path, start_index = phase3_pre
 
                 all_rows: list = []
                 try:
