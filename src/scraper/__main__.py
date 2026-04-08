@@ -9,6 +9,17 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from scraper.core.browser import new_browser_context
+from scraper.core.checkpoint import (
+    CHECKPOINT_VERSION,
+    SeedCheckpoint,
+    checkpoint_path_for_output,
+    delete_seed_checkpoint,
+    explain_non_interactive_resume,
+    is_checkpoint_valid_for_run,
+    load_seed_checkpoint,
+    prompt_full_or_resume,
+    save_seed_checkpoint,
+)
 from scraper.core.csv_sink import read_existing_dedupe_keys
 from scraper.core.delays import sleep_random
 from scraper.core.seeds import load_seed_placements
@@ -57,26 +68,98 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     max_retries_per_location=args.max_search_retries,
                     wall_clock_budget_s=wall_clock,
                 )
+                total_seeds = len(placements)
+                cp_path = checkpoint_path_for_output(out)
+                cp_state = load_seed_checkpoint(cp_path)
+                start_index = 0
+
+                if args.fresh:
+                    delete_seed_checkpoint(cp_path)
+                elif cp_state is not None:
+                    valid = is_checkpoint_valid_for_run(
+                        cp_state,
+                        input_path=input_path,
+                        total_seeds=total_seeds,
+                    )
+                    if not valid or cp_state.next_index < 0:
+                        delete_seed_checkpoint(cp_path)
+                    elif cp_state.next_index >= total_seeds:
+                        delete_seed_checkpoint(cp_path)
+                    elif cp_state.next_index > 0:
+                        if sys.stdin.isatty():
+                            if prompt_full_or_resume(
+                                completed=cp_state.next_index,
+                                total=total_seeds,
+                                next_human=cp_state.next_index + 1,
+                                checkpoint_file=cp_path,
+                            ):
+                                delete_seed_checkpoint(cp_path)
+                            else:
+                                start_index = cp_state.next_index
+                        else:
+                            start_index = cp_state.next_index
+                            explain_non_interactive_resume(
+                                next_human=start_index + 1,
+                                total=total_seeds,
+                            )
+
                 all_rows: list = []
-                for i, (loc, seed) in enumerate(placements):
-                    shared.check_wall_clock()
-                    if i > 0:
-                        sleep_random()
-                    print(f"Location {i + 1}/{len(placements)} search_seed={seed!r}", flush=True)
-                    try:
-                        batch = runner(
-                            page,
-                            out,
-                            location_query=loc,
-                            search_seed=seed,
-                            limit=args.limit,
-                            dedupe_seen=seen,
-                            brakes=shared,
+                try:
+                    for i in range(start_index, total_seeds):
+                        loc, seed = placements[i]
+                        shared.check_wall_clock()
+                        if i > 0:
+                            sleep_random()
+                        print(
+                            f"Progress: checkpoint {i + 1}/{total_seeds} (seed CSV rows) "
+                            f"search_seed={seed!r}",
+                            flush=True,
                         )
-                    except Exception as exc:
-                        print(f"  skipped: {exc}", file=sys.stderr, flush=True)
-                        continue
-                    all_rows.extend(batch)
+                        try:
+                            batch = runner(
+                                page,
+                                out,
+                                location_query=loc,
+                                search_seed=seed,
+                                limit=args.limit,
+                                dedupe_seen=seen,
+                                brakes=shared,
+                            )
+                        except Exception as exc:
+                            print(f"  skipped: {exc}", file=sys.stderr, flush=True)
+                            continue
+
+                        all_rows.extend(batch)
+                        save_seed_checkpoint(
+                            cp_path,
+                            SeedCheckpoint(
+                                version=CHECKPOINT_VERSION,
+                                input_path=str(input_path.resolve()),
+                                total_seeds=total_seeds,
+                                next_index=i + 1,
+                            ),
+                        )
+                except KeyboardInterrupt:
+                    print(
+                        "\nInterrupted. Progress saved for completed seeds; "
+                        "re-run to choose resume or use --fresh.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 130
+
+                last_cp = load_seed_checkpoint(cp_path)
+                if (
+                    last_cp is not None
+                    and last_cp.next_index >= total_seeds
+                    and is_checkpoint_valid_for_run(
+                        last_cp,
+                        input_path=input_path,
+                        total_seeds=total_seeds,
+                    )
+                ):
+                    delete_seed_checkpoint(cp_path)
+
                 rows = all_rows
             else:
                 rows = runner(
@@ -154,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Stop cleanly after S seconds (optional; shared across all seeds when using --input)",
     )
     run_p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
+    run_p.add_argument(
+        "--fresh",
+        action="store_true",
+        help="With --input: ignore/delete seed checkpoint and start from seed 1",
+    )
     run_p.set_defaults(func=_cmd_run)
 
     args = parser.parse_args(argv)
