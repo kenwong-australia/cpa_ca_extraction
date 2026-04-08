@@ -13,6 +13,12 @@ from playwright.sync_api import Locator, Page, Response
 from scraper.core.csv_sink import append_contact_row
 from scraper.core.dedupe import dedupe_key_normalised
 from scraper.core.delays import sleep_random
+from scraper.core.interruptible import (
+    interruptible_page_wait_ms,
+    interruptible_sleep,
+    locator_wait_visible_interruptible,
+)
+from scraper.core.rate_limit import RateLimitedError, raise_if_rate_limited
 from scraper.core.models import ContactRecord, RunContext
 from scraper.core.safety import SafetyBrakes
 
@@ -181,7 +187,7 @@ def _set_location_via_places(page: Page, location_query: str) -> None:
     box.click()
     box.fill("")
     box.press_sequentially(location_query, delay=55)
-    page.wait_for_timeout(2_000)
+    interruptible_page_wait_ms(page, 2_000)
     first_token = location_query.split()[0] if location_query.strip() else ""
     pac = page.locator(".pac-item").filter(has_text=re.compile(re.escape(first_token), re.I)).first
     if pac.is_visible(timeout=5_000):
@@ -192,14 +198,14 @@ def _set_location_via_places(page: Page, location_query: str) -> None:
             pac_fallback.click()
         else:
             box.press("ArrowDown")
-            page.wait_for_timeout(200)
+            interruptible_page_wait_ms(page, 200)
             box.press("Enter")
-    page.wait_for_timeout(800)
+    interruptible_page_wait_ms(page, 800)
     try:
         box.press("Tab")
     except Exception:
         pass
-    page.wait_for_timeout(300)
+    interruptible_page_wait_ms(page, 300)
 
 
 def _register_findacpa_capture(page: Page, buckets: list[list[dict[str, Any]]]) -> None:
@@ -261,17 +267,22 @@ def _run_search_flow(
     """One attempt: load site, search, wait for results. Mutates buckets (cleared by caller)."""
     brakes.check_wall_clock()
     page.goto(FIND_A_CPA_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(4_000)
+    interruptible_page_wait_ms(page, 4_000)
+    raise_if_rate_limited(page)
     _ensure_country_australia(page)
     _set_location_via_places(page, location_query)
 
     find_btn = page.get_by_role("button", name=re.compile(r"FIND A CPA", re.I))
-    find_btn.wait_for(state="visible", timeout=30_000)
+    locator_wait_visible_interruptible(find_btn, total_timeout_ms=30_000)
     find_btn.evaluate("el => el.click()")
 
     practice_hint = _practice_items(page)
     modify_btn = page.get_by_role("button", name=re.compile(r"Modify Search", re.I))
-    modify_btn.or_(practice_hint.first).wait_for(state="visible", timeout=90_000)
+    locator_wait_visible_interruptible(
+        modify_btn.or_(practice_hint.first),
+        total_timeout_ms=90_000,
+    )
+    raise_if_rate_limited(page)
 
     if page.get_by_text(re.compile(r"No results found near", re.I)).is_visible():
         raise RuntimeError(
@@ -293,9 +304,10 @@ def _run_search_flow(
 
 def _click_back_to_results(page: Page) -> None:
     back = page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I))
-    back.wait_for(state="visible", timeout=30_000)
+    locator_wait_visible_interruptible(back, total_timeout_ms=30_000)
     back.evaluate("el => el.click()")
-    _practice_items(page).first.wait_for(state="visible", timeout=30_000)
+    locator_wait_visible_interruptible(_practice_items(page).first, total_timeout_ms=30_000)
+    raise_if_rate_limited(page)
 
 
 def _append_row_for_listing(
@@ -370,7 +382,7 @@ def _scrape_open_detail(
     api_rows: list[dict[str, Any]],
     dedupe_seen: set[str] | None = None,
 ) -> ContactRecord | None:
-    practice_row.wait_for(state="visible", timeout=60_000)
+    locator_wait_visible_interruptible(practice_row, total_timeout_ms=60_000)
     try:
         practice_row.scroll_into_view_if_needed()
     except Exception:
@@ -384,10 +396,11 @@ def _scrape_open_detail(
 
     practice_row.evaluate("el => el.click()")
 
-    page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I)).wait_for(
-        state="visible",
-        timeout=30_000,
+    locator_wait_visible_interruptible(
+        page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I)),
+        total_timeout_ms=30_000,
     )
+    raise_if_rate_limited(page)
 
     d_phone, d_email, d_web = _detail_links(page)
     return _append_row_for_listing(
@@ -436,12 +449,16 @@ def run_cpa_au(
                 brakes,
             )
             break
-        except BaseException as e:
+        except RateLimitedError:
+            raise
+        except Exception as e:
             last_err = e
             if attempt + 1 >= brakes.max_retries_per_location:
                 raise RuntimeError(
                     f"Search failed after {brakes.max_retries_per_location} attempt(s).",
                 ) from last_err
+            backoff_s = min(120.0, 10.0 * (2**attempt))
+            interruptible_sleep(backoff_s)
     else:
         raise RuntimeError("Search failed.") from last_err
 
@@ -449,7 +466,7 @@ def run_cpa_au(
     brakes.on_success()
 
     items = _practice_items(page)
-    items.first.wait_for(state="visible", timeout=30_000)
+    locator_wait_visible_interruptible(items.first, total_timeout_ms=30_000)
     n = items.count()
     if n == 0:
         raise RuntimeError("No practice list rows found.")
@@ -462,6 +479,7 @@ def run_cpa_au(
         if i > 0:
             sleep_random()
 
+        raise_if_rate_limited(page)
         items = _practice_items(page)
         row = items.nth(i)
         try:
@@ -469,7 +487,9 @@ def run_cpa_au(
             brakes.on_success()
             if rec is not None:
                 records.append(rec)
-        except BaseException:
+        except RateLimitedError:
+            raise
+        except Exception:
             brakes.on_failure()
             try:
                 back = page.get_by_role("button", name=re.compile(r"BACK TO RESULT", re.I))

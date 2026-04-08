@@ -73,6 +73,14 @@ Between rows, the scraper waits a **uniform random 3–8 seconds** (implementati
 
 The CPA UI’s **Find** control is driven with a DOM `click()` so the portal handler runs reliably in headless Chromium.
 
+### Stopping the run (Ctrl+C)
+
+Playwright’s synchronous browser calls can hold the process until the current step finishes, so **Ctrl+C may not return immediately**. The scraper **chunks long waits** so interrupts are picked up sooner; if it still feels stuck, press **Ctrl+C again within about two seconds** to **force exit**, or from another terminal run `kill -INT <pid>` / `kill -9 <pid>` on the Python process.
+
+### Rate limits (Cloudflare Error 1015)
+
+If the site returns a **Cloudflare / rate-limit page**, the run **stops with exit code 3** and a short message. **Wait** until `find-a-cpa` loads normally in a browser, then **re-run the same command**; with **`--input`**, the seed **checkpoint is not advanced** for the row that was blocked, so that suburb will be tried again on resume.
+
 ### Browser “Know your location” (manual browsing)
 
 Chrome may show **Use your location?** for `apps.cpaaustralia.com.au`. Choosing **Allow while visiting the site** is fine and lets the map use your position.
@@ -87,7 +95,7 @@ Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **
 
 - **Between locations:** same **3–8 s** random delay as between practices (§3.1).
 - **Dedupe:** rows whose `dedupe_key` (or normalised fallback) was **already in the output file** or written earlier in this run are skipped (no duplicate CSV lines).
-- **Progress:** each seed row logs a line such as `Progress: checkpoint 12/168 (seed CSV rows) search_seed=…`.
+- **Progress:** each seed row logs a line such as `Progress: seed 12/168 (of seed CSV) search_seed=…`. A **`skipped:`** line means that row did not complete — the **on-disk checkpoint does not advance**, so the next run will **try that seed again** after resume.
 - **Checkpoints:** after each **completed** seed row, progress is saved in a **sidecar file** next to your output CSV: **`{your-out}.csv.seed_checkpoint.json`** (for example `data/run_20260408_1430.csv.seed_checkpoint.json`). Re-running with the **same** `--input`, **`--out`**, and seed row count (including **`--max-locations`**) lets you resume safely.
 - **Interrupted runs (Ctrl+C):** completed seeds are already checkpointed; run the same command again to continue.
 - **Fresh run vs resume**

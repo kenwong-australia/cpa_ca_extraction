@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -23,8 +26,25 @@ from scraper.core.checkpoint import (
 from scraper.core.csv_sink import read_existing_dedupe_keys
 from scraper.core.delays import sleep_random
 from scraper.core.seeds import load_seed_placements
+from scraper.core.rate_limit import RateLimitedError
 from scraper.core.safety import SafetyBrakes
 from scraper.registry import SITE_REGISTRY
+
+_SIGINT_PREV_TIME: float | None = None
+
+
+def _install_sigint_second_forces_exit():
+    """Second Ctrl+C within ~2s calls os._exit(130) (Playwright can delay the first)."""
+
+    def _handler(signum: int, frame: object | None) -> None:  # noqa: ARG001
+        global _SIGINT_PREV_TIME
+        now = time.monotonic()
+        if _SIGINT_PREV_TIME is not None and (now - _SIGINT_PREV_TIME) <= 2.0:
+            os._exit(130)
+        _SIGINT_PREV_TIME = now
+        raise KeyboardInterrupt
+
+    return signal.signal(signal.SIGINT, _handler)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -51,6 +71,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if input_path is not None and not input_path.is_file():
         print(f"--input not found: {input_path}", file=sys.stderr)
         return 2
+
+    rows: list = []
 
     with sync_playwright() as p:
         browser, _ctx, page = new_browser_context(p, headless=not args.headed)
@@ -111,7 +133,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         if i > 0:
                             sleep_random()
                         print(
-                            f"Progress: checkpoint {i + 1}/{total_seeds} (seed CSV rows) "
+                            f"Progress: seed {i + 1}/{total_seeds} (of seed CSV) "
                             f"search_seed={seed!r}",
                             flush=True,
                         )
@@ -125,8 +147,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 dedupe_seen=seen,
                                 brakes=shared,
                             )
+                        except RateLimitedError:
+                            raise
                         except Exception as exc:
-                            print(f"  skipped: {exc}", file=sys.stderr, flush=True)
+                            print(
+                                f"  skipped: {exc} "
+                                f"(checkpoint not advanced — this seed row will retry on resume)",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                             continue
 
                         all_rows.extend(batch)
@@ -172,6 +201,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     max_search_retries=args.max_search_retries,
                     wall_clock_seconds=wall_clock,
                 )
+        except RateLimitedError as exc:
+            print(f"\n{exc}", file=sys.stderr, flush=True)
+            print(
+                "Exit 3: wait until the site is reachable again, then re-run with the same "
+                "command; your seed checkpoint is unchanged for the blocked row.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 3
         finally:
             browser.close()
 
@@ -180,7 +218,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="scraper", description="Contact extraction CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -246,6 +284,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     return int(args.func(args))
+
+
+def main(argv: list[str] | None = None) -> int:
+    old = _install_sigint_second_forces_exit()
+    try:
+        return _main_impl(argv)
+    finally:
+        signal.signal(signal.SIGINT, old)
 
 
 if __name__ == "__main__":

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import random
-import time
+
+from scraper.core.interruptible import interruptible_sleep
 
 
 def sleep_random(*, min_s: float = 3.0, max_s: float = 8.0) -> None:
-    time.sleep(random.uniform(min_s, max_s))
+    interruptible_sleep(random.uniform(min_s, max_s))

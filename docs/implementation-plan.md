@@ -271,7 +271,7 @@ Implement **CPA first** inside `sites/cpa_australia.py`; keep `core/` dumb and r
 | **Between-location delay** | Same **3–8 s** uniform random wait as §3.1 after each location (including empty result). |
 | **`--max-locations`** | Process only the first *N* seed rows (must match between resume attempts for a valid checkpoint). |
 | **Checkpoints** | Sidecar **`{--out}.seed_checkpoint.json`**; updated after each **successful** seed row; interactive **full vs resume** prompt when appropriate; non-TTY auto-resume; **`--fresh`** clears checkpoint; **`KeyboardInterrupt`** leaves last good checkpoint. |
-| **Progress logging** | e.g. `Progress: checkpoint i/n (seed CSV rows) search_seed=…`. |
+| **Progress logging** | e.g. `Progress: seed i/n (of seed CSV) search_seed=…`; **`skipped:`** means no checkpoint advance for that row (retried on resume). |
 
 ---
 
