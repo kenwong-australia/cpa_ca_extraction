@@ -118,6 +118,13 @@ def _ws_collapse(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
 
+def _record_dedupe_identity(record: ContactRecord) -> str:
+    k = (record.dedupe_key or "").strip()
+    if k:
+        return k
+    return (record.dedupe_key_normalised or "").strip()
+
+
 def _fields_from_account_row(r: dict[str, Any]) -> dict[str, str]:
     return {
         "company_name": _pick(r, "name", "Name", "accountname", "AccountName"),
@@ -300,7 +307,8 @@ def _append_row_for_listing(
     d_phone: str,
     d_email: str,
     d_web: str,
-) -> ContactRecord:
+    dedupe_seen: set[str] | None = None,
+) -> ContactRecord | None:
     api0 = _best_account_row(api_rows, list_preview) if api_rows else {}
     api_fields = _fields_from_account_row(api0) if api0 else {}
 
@@ -345,7 +353,12 @@ def _append_row_for_listing(
         dedupe_key=dedupe,
         dedupe_key_normalised=norm,
     )
+    ident = _record_dedupe_identity(record)
+    if dedupe_seen is not None and ident and ident in dedupe_seen:
+        return None
     append_contact_row(out_csv, record)
+    if dedupe_seen is not None and ident:
+        dedupe_seen.add(ident)
     return record
 
 
@@ -355,7 +368,8 @@ def _scrape_open_detail(
     out_csv: Path,
     practice_row: Locator,
     api_rows: list[dict[str, Any]],
-) -> ContactRecord:
+    dedupe_seen: set[str] | None = None,
+) -> ContactRecord | None:
     practice_row.wait_for(state="visible", timeout=60_000)
     try:
         practice_row.scroll_into_view_if_needed()
@@ -384,6 +398,7 @@ def _scrape_open_detail(
         d_phone=d_phone,
         d_email=d_email,
         d_web=d_web,
+        dedupe_seen=dedupe_seen,
     )
 
 
@@ -395,6 +410,7 @@ def run_cpa_au(
     search_seed: str,
     limit: int | None = None,
     brakes: SafetyBrakes | None = None,
+    dedupe_seen: set[str] | None = None,
 ) -> list[ContactRecord]:
     """
     Search one location; scrape one row (limit=1) or every practice row (limit=None).
@@ -449,9 +465,10 @@ def run_cpa_au(
         items = _practice_items(page)
         row = items.nth(i)
         try:
-            rec = _scrape_open_detail(page, ctx, out_csv, row, api_rows)
+            rec = _scrape_open_detail(page, ctx, out_csv, row, api_rows, dedupe_seen)
             brakes.on_success()
-            records.append(rec)
+            if rec is not None:
+                records.append(rec)
         except BaseException:
             brakes.on_failure()
             try:
@@ -510,9 +527,11 @@ def run_cpa_au_cli(
     max_consecutive_failures: int = 10,
     max_search_retries: int = 3,
     wall_clock_seconds: float | None = None,
+    dedupe_seen: set[str] | None = None,
+    brakes: SafetyBrakes | None = None,
 ) -> list[ContactRecord]:
-    """CLI entry: builds `SafetyBrakes` from flags and runs Phase 2 (or `limit=1` for one row)."""
-    brakes = SafetyBrakes(
+    """CLI entry: builds `SafetyBrakes` from flags unless `brakes` is passed (Phase 3 multi-run)."""
+    brakes = brakes or SafetyBrakes(
         max_consecutive_failures=max_consecutive_failures,
         max_retries_per_location=max_search_retries,
         wall_clock_budget_s=wall_clock_seconds,
@@ -524,4 +543,5 @@ def run_cpa_au_cli(
         search_seed=search_seed,
         limit=limit,
         brakes=brakes,
+        dedupe_seen=dedupe_seen,
     )

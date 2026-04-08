@@ -78,4 +78,15 @@ When you run **`python -m scraper`**, Playwright already **grants geolocation** 
 
 If the red line **“You can only search for either Australian or New Zealand address.”** appears while typing manually, it usually means the field does not yet have a **confirmed Google Places** value: pick a suggestion from the dropdown (keyboard or click), then try **FIND A CPA** again.
 
-Phase 3 will add multi-location seeds and dedupe across runs.
+## Phase 3 — many locations (seed CSV)
+
+Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **`postcode`** (extra columns are ignored). Each row becomes a Places query **`{suburb} {state}, Australia`** and provenance **`{suburb},{state},{postcode}`**.
+
+- **Between locations:** same **5–15 s** random delay as between practices (§3.1).
+- **Dedupe:** rows whose `dedupe_key` (or normalised fallback) was **already in the output file** or written earlier in this run are skipped (no duplicate CSV lines).
+
+```bash
+./run_scraper.sh run --site cpa_au --out data/run.csv --input data/seeds.168.csv --max-locations 2
+```
+
+`--limit` applies **per location**. `--wall-clock-seconds` applies to the **whole** multi-location run. Omit `--max-locations` to process every seed row.
