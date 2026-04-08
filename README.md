@@ -59,7 +59,7 @@ OUT="data/run_$(date +%Y%m%d_%H%M).csv"
 # Or with venv activated: python -m scraper run --site cpa_au --out "$OUT"   # add --headed to see browser
 ```
 
-Between rows, the scraper waits a **uniform random 5–15 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
+Between rows, the scraper waits a **uniform random 3–8 seconds** (implementation plan §3.1) after returning to the list and before opening the next practice.
 
 ### Options
 
@@ -85,7 +85,7 @@ If the red line **“You can only search for either Australian or New Zealand ad
 
 Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **`postcode`** (extra columns are ignored). Each row becomes a Places query **`{suburb} {state}, Australia`** and provenance **`{suburb},{state},{postcode}`**.
 
-- **Between locations:** same **5–15 s** random delay as between practices (§3.1).
+- **Between locations:** same **3–8 s** random delay as between practices (§3.1).
 - **Dedupe:** rows whose `dedupe_key` (or normalised fallback) was **already in the output file** or written earlier in this run are skipped (no duplicate CSV lines).
 - **Progress:** each seed row logs a line such as `Progress: checkpoint 12/168 (seed CSV rows) search_seed=…`.
 - **Checkpoints:** after each **completed** seed row, progress is saved in a **sidecar file** next to your output CSV: **`{your-out}.csv.seed_checkpoint.json`** (for example `data/run_20260408_1430.csv.seed_checkpoint.json`). Re-running with the **same** `--input`, **`--out`**, and seed row count (including **`--max-locations`**) lets you resume safely.

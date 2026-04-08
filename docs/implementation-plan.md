@@ -69,12 +69,12 @@ Early API knowledge **changes** how aggressively you invest in DOM-only selector
 
 Apply a **uniform random wait** between **5 and 15 seconds** (inclusive) before each **site-driving** step that follows meaningful work — i.e. after finishing one unit of interaction and before starting the next that hits the app/network. Concretely:
 
-- **Phase 2:** After closing or leaving a detail view (or before opening the next row), wait **5–15 s** at random before the next row action.
-- **Phase 3:** Same between rows; additionally, after completing all rows for one location (or after a search that yields none), wait **5–15 s** at random before starting the **next** location search.
+- **Phase 2:** After closing or leaving a detail view (or before opening the next row), wait **3–8 s** at random before the next row action.
+- **Phase 3:** Same between rows; additionally, after completing all rows for one location (or after a search that yields none), wait **3–8 s** at random before starting the **next** location search.
 
 Phase 1 may omit inter-step delays if it is a single one-off chain; once the flow repeats (Phase 2+), use the policy above.
 
-**Polite throughput (v1):** Do **not** add an artificial “max searches per hour” or “max actions per run” **for politeness** — only this per-step **5–15 s** jitter. (This is separate from **safety brakes** in §3.2.)
+**Polite throughput (v1):** Do **not** add an artificial “max searches per hour” or “max actions per run” **for politeness** — only this per-step **3–8 s** jitter. (This is separate from **safety brakes** in §3.2.)
 
 Configurable (Phase 4): env or config can override `min_seconds` / `max_seconds` while keeping **5 / 15** as defaults.
 
@@ -108,7 +108,7 @@ Keep these **free of CPA-specific selectors**:
 - **Browser session:** create context, optional storage state, headless/slow-mo flags.
 - **Run metadata:** `run_date`, `run_timestamp_utc`, optional `site_id` string.
 - **Output:** write rows to CSV (stdlib `csv` is fine) using a **single shared row schema** or a small `TypedDict` / dataclass that all sites map into (e.g. `company_name`, `address`, `phone`, `email`, `website`, plus metadata columns).
-- **Utilities:** normalise phone/email, **`sleep_random(min_s=5, max_s=15)`** for §3.1, **circuit-breaker counters** for §3.2, dedupe helper that respects **primary vs fallback keys** (§5.2).
+- **Utilities:** normalise phone/email, **`sleep_random(min_s=3, max_s=8)`** for §3.1, **circuit-breaker counters** for §3.2, dedupe helper that respects **primary vs fallback keys** (§5.2).
 
 ### 4.2 Site-specific adapter (CPA now; others later)
 
@@ -213,7 +213,7 @@ For each search location (implemented in the site module):
 
 ## 8. Operational and compliance hygiene
 
-- **Polite pacing:** **5–15 s** uniform random jitter between site-driving steps (§3.1). **No artificial cap** on total successful searches or detail opens *for politeness* — only jitter between steps.
+- **Polite pacing:** **3–8 s** uniform random jitter between site-driving steps (§3.1). **No artificial cap** on total successful searches or detail opens *for politeness* — only jitter between steps.
 - **Safety brakes:** **Always** implement §3.2 (consecutive failures, retries per location, optional location count / wall-clock) so selector bugs or stuck states cannot burn unlimited time.
 - **Terms / robots:** Review site terms and `robots.txt`; this document is not legal advice.
 - **Privacy:** Minimise stored fields; treat contact details as sensitive.
@@ -237,7 +237,7 @@ cpa_ca_extraction/
         checkpoint.py          # Phase 3 seed-row checkpoint JSON (--input)
         models.py              # ContactRecord, run info
         dedupe.py              # primary + fallback keys (§5.2)
-        delays.py              # random sleep 5–15 s (§3.1); overridable in Phase 4
+        delays.py              # random sleep 3–8 s (§3.1); overridable in Phase 4
         safety.py              # consecutive failures, retries, optional budgets (§3.2)
       sites/
         __init__.py
@@ -268,11 +268,11 @@ Implement **CPA first** inside `sites/cpa_australia.py`; keep `core/` dumb and r
 |-------|--------|
 | **Seed input** | `--input path.csv` — `suburb`, `state`, optional `postcode`; maps to Places query + `search_seed`. |
 | **Seen-set dedupe** | `dedupe_key` / normalised keys already in **`--out`** or written earlier in the run are skipped. |
-| **Between-location delay** | Same **5–15 s** uniform random wait as §3.1 after each location (including empty result). |
+| **Between-location delay** | Same **3–8 s** uniform random wait as §3.1 after each location (including empty result). |
 | **`--max-locations`** | Process only the first *N* seed rows (must match between resume attempts for a valid checkpoint). |
 | **Checkpoints** | Sidecar **`{--out}.seed_checkpoint.json`**; updated after each **successful** seed row; interactive **full vs resume** prompt when appropriate; non-TTY auto-resume; **`--fresh`** clears checkpoint; **`KeyboardInterrupt`** leaves last good checkpoint. |
 | **Progress logging** | e.g. `Progress: checkpoint i/n (seed CSV rows) search_seed=…`. |
 
 ---
 
-*Document version: Playwright committed; Phase 0 API/browser verdict; 5–15 s polite jitter; safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); Phase 3 checkpoints + dated `--out` convention (§7, 2026-04-08); extensible layout.*
+*Document version: Playwright committed; Phase 0 API/browser verdict; 3–8 s polite jitter; safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); Phase 3 checkpoints + dated `--out` convention (§7, 2026-04-08); extensible layout.*

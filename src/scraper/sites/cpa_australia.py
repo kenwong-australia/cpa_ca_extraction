@@ -415,7 +415,7 @@ def run_cpa_au(
     """
     Search one location; scrape one row (limit=1) or every practice row (limit=None).
 
-    Between rows: §3.1 random 5–15 s after returning to the list. Uses §3.2 safety brakes.
+    Between rows: §3.1 random 3–8 s after returning to the list. Uses §3.2 safety brakes.
     """
     brakes = brakes or SafetyBrakes()
     buckets: list[list[dict[str, Any]]] = []
