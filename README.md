@@ -59,7 +59,7 @@ OUT="data/run_$(date +%Y%m%d_%H%M).csv"
 # Or with venv activated: python -m scraper run --site cpa_au --out "$OUT"   # add --headed to see browser
 ```
 
-Between rows, the scraper waits a **uniform random pause** after returning to the list and before opening the next practice. **Defaults** are **3–8 seconds** (implementation plan §3.1). Override with **`--jitter-min-seconds`** and **`--jitter-max-seconds`** (same bounds apply between Phase 3 seed rows and between listing rows).
+Between rows, the scraper waits a **uniform random pause** after returning to the list and before opening the next practice. **Defaults** are **5–15 seconds** (implementation plan §3.1). Override with **`--jitter-min-seconds`** and **`--jitter-max-seconds`** (same bounds apply between Phase 3 seed rows and between listing rows).
 
 ### Options
 
@@ -69,7 +69,7 @@ Between rows, the scraper waits a **uniform random pause** after returning to th
 - `--max-consecutive-failures` — abort after this many **consecutive** row failures (default: `10`, §3.2)
 - `--max-search-retries` — retries for the initial search / Places step (default: `3`, §3.2)
 - `--wall-clock-seconds S` — stop after **S** seconds (optional, §3.2)
-- `--jitter-min-seconds S` / **`--jitter-max-seconds S`** — min/max **uniform random delay** (seconds) between Phase 3 seeds and between practice rows within a search (defaults: `3` and `8`). Use **wider** ranges (e.g. `10`–`25`) if you hit Cloudflare rate limits; `min` must be ≤ `max`.
+- `--jitter-min-seconds S` / **`--jitter-max-seconds S`** — min/max **uniform random delay** (seconds) between Phase 3 seeds and between practice rows within a search (defaults: `5` and `15`). Use **wider** ranges (e.g. `15`–`35`) if you hit Cloudflare rate limits; `min` must be ≤ `max`.
 - `--headed` — show the browser (`python -m scraper` default is headless; **`./run_scraper.sh run` adds this for you** unless `CPA_SCRAPER_HEADLESS=1`)
 
 The CPA UI’s **Find** control is driven with a DOM `click()` so the portal handler runs reliably in headless Chromium.
@@ -84,7 +84,7 @@ If the site returns a **Cloudflare / rate-limit page**, the run **stops with exi
 
 **Reducing how often you hit 1015 (no guarantees — Cloudflare also weighs IP and traffic patterns):**
 
-- **Slow down:** pass **`--jitter-min-seconds`** / **`--jitter-max-seconds`** with higher values (e.g. `10` and `25`, or `15` and `35`) so there are fewer requests per minute.
+- **Slow down:** pass **`--jitter-min-seconds`** / **`--jitter-max-seconds`** with higher values than the defaults (e.g. `15` and `35`, or `20` and `45`) so there are fewer requests per minute.
 - **Shorter sessions:** stop after a handful of suburbs (Ctrl+C), wait, then resume — checkpoints and dedupe support that workflow.
 - **Fewer detail opens:** **`--limit N`** caps rows **per** suburb if you do not need the full list every time.
 - **Network:** residential access often behaves better than VPN/datacenter IPs.
@@ -101,7 +101,7 @@ If the red line **“You can only search for either Australian or New Zealand ad
 
 Use **`--input`** with a CSV that has **`suburb`**, **`state`**, and optional **`postcode`** (extra columns are ignored). Each row becomes a Places query **`{suburb} {state}, Australia`** and provenance **`{suburb},{state},{postcode}`**.
 
-- **Between locations:** same **random delay** as between practices (§3.1): defaults **3–8 s**, overridable with **`--jitter-min-seconds`** / **`--jitter-max-seconds`**.
+- **Between locations:** same **random delay** as between practices (§3.1): defaults **5–15 s**, overridable with **`--jitter-min-seconds`** / **`--jitter-max-seconds`**.
 - **Checkpoint prompt vs browser:** for **`--input`**, the **full run vs resume** prompt runs **before** Chromium starts, so you are not left waiting at `Enter choice` while a **headless** browser is already running. After launch, stderr prints **`Browser: headed …`** or **`Browser: headless …`** so you can confirm the mode.
 - **Dedupe:** rows whose `dedupe_key` (or normalised fallback) was **already in the output file** or written earlier in this run are skipped (no duplicate CSV lines).
 - **Progress:** each seed row logs a line such as `Progress: seed 12/168 (of seed CSV) search_seed=…`. A **`skipped:`** line means that row did not complete — the **on-disk checkpoint does not advance**, so the next run will **try that seed again** after resume.
@@ -117,7 +117,7 @@ OUT="data/run_$(date +%Y%m%d_%H%M).csv"
 # Same command later to resume (same $OUT path), or add --fresh to restart from seed 1
 # Slower pacing if Cloudflare rate-limits you (same resume command, same $OUT):
 # ./run_scraper.sh run --site cpa_au --out "$OUT" --input data/seeds.168.csv \
-#   --jitter-min-seconds 10 --jitter-max-seconds 25
+#   --jitter-min-seconds 15 --jitter-max-seconds 35
 ```
 
 `--limit` applies **per location**. `--wall-clock-seconds` applies to the **whole** multi-location run. Omit `--max-locations` to process every seed row. **`--fresh`** (Phase 3 only) resets the seed checkpoint as described above.

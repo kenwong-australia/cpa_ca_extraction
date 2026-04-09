@@ -7,5 +7,5 @@ import random
 from scraper.core.interruptible import interruptible_sleep
 
 
-def sleep_random(*, min_s: float = 3.0, max_s: float = 8.0) -> None:
+def sleep_random(*, min_s: float = 5.0, max_s: float = 15.0) -> None:
     interruptible_sleep(random.uniform(min_s, max_s))

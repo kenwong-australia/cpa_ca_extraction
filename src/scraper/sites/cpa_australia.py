@@ -424,8 +424,8 @@ def run_cpa_au(
     limit: int | None = None,
     brakes: SafetyBrakes | None = None,
     dedupe_seen: set[str] | None = None,
-    jitter_min_s: float = 3.0,
-    jitter_max_s: float = 8.0,
+    jitter_min_s: float = 5.0,
+    jitter_max_s: float = 15.0,
 ) -> list[ContactRecord]:
     """
     Search one location; scrape one row (limit=1) or every practice row (limit=None).
@@ -551,8 +551,8 @@ def run_cpa_au_cli(
     wall_clock_seconds: float | None = None,
     dedupe_seen: set[str] | None = None,
     brakes: SafetyBrakes | None = None,
-    jitter_min_s: float = 3.0,
-    jitter_max_s: float = 8.0,
+    jitter_min_s: float = 5.0,
+    jitter_max_s: float = 15.0,
 ) -> list[ContactRecord]:
     """CLI entry: builds `SafetyBrakes` from flags unless `brakes` is passed (Phase 3 multi-run)."""
     brakes = brakes or SafetyBrakes(

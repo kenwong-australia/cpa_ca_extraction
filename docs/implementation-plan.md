@@ -69,14 +69,14 @@ Early API knowledge **changes** how aggressively you invest in DOM-only selector
 
 Apply a **uniform random wait** between **5 and 15 seconds** (inclusive) before each **site-driving** step that follows meaningful work — i.e. after finishing one unit of interaction and before starting the next that hits the app/network. Concretely:
 
-- **Phase 2:** After closing or leaving a detail view (or before opening the next row), wait **3–8 s** at random before the next row action.
-- **Phase 3:** Same between rows; additionally, after completing all rows for one location (or after a search that yields none), wait **3–8 s** at random before starting the **next** location search.
+- **Phase 2:** After closing or leaving a detail view (or before opening the next row), wait **5–15 s** at random before the next row action.
+- **Phase 3:** Same between rows; additionally, after completing all rows for one location (or after a search that yields none), wait **5–15 s** at random before starting the **next** location search.
 
 Phase 1 may omit inter-step delays if it is a single one-off chain; once the flow repeats (Phase 2+), use the policy above.
 
 **Polite throughput (v1):** Do **not** add an artificial “max searches per hour” or “max actions per run” **for politeness** — only this per-step jitter. (This is separate from **safety brakes** in §3.2.)
 
-**CLI (implemented):** `run` accepts **`--jitter-min-seconds`** and **`--jitter-max-seconds`** (defaults **3** and **8**), applied both **between Phase 3 seed rows** and **between practice rows** within one search. Operators can raise these values when mitigating Cloudflare **Error 1015** (see README). Further env/config overrides remain optional (Phase 4).
+**CLI (implemented):** `run` accepts **`--jitter-min-seconds`** and **`--jitter-max-seconds`** (defaults **5** and **15**), applied both **between Phase 3 seed rows** and **between practice rows** within one search. Operators can raise these values when mitigating Cloudflare **Error 1015** (see README). Further env/config overrides remain optional (Phase 4).
 
 ### 3.2 Safety brakes — circuit breakers (Phases 2+)
 
@@ -213,7 +213,7 @@ For each search location (implemented in the site module):
 
 ## 8. Operational and compliance hygiene
 
-- **Polite pacing:** Uniform random jitter between site-driving steps (§3.1); **defaults 3–8 s**, CLI **`--jitter-min-seconds` / `--jitter-max-seconds`**. **No artificial cap** on total successful searches or detail opens *for politeness* — only jitter between steps.
+- **Polite pacing:** Uniform random jitter between site-driving steps (§3.1); **defaults 5–15 s**, CLI **`--jitter-min-seconds` / `--jitter-max-seconds`**. **No artificial cap** on total successful searches or detail opens *for politeness* — only jitter between steps.
 - **Safety brakes:** **Always** implement §3.2 (consecutive failures, retries per location, optional location count / wall-clock) so selector bugs or stuck states cannot burn unlimited time.
 - **Terms / robots:** Review site terms and `robots.txt`; this document is not legal advice.
 - **Privacy:** Minimise stored fields; treat contact details as sensitive.
@@ -237,7 +237,7 @@ cpa_ca_extraction/
         checkpoint.py          # Phase 3 seed-row checkpoint JSON (--input)
         models.py              # ContactRecord, run info
         dedupe.py              # primary + fallback keys (§5.2)
-        delays.py              # random sleep (§3.1); defaults 3–8 s; bounds overridable via CLI
+        delays.py              # random sleep (§3.1); defaults 5–15 s; bounds overridable via CLI
         safety.py              # consecutive failures, retries, optional budgets (§3.2)
       sites/
         __init__.py
@@ -268,7 +268,7 @@ Implement **CPA first** inside `sites/cpa_australia.py`; keep `core/` dumb and r
 |-------|--------|
 | **Seed input** | `--input path.csv` — `suburb`, `state`, optional `postcode`; maps to Places query + `search_seed`. |
 | **Seen-set dedupe** | `dedupe_key` / normalised keys already in **`--out`** or written earlier in the run are skipped. |
-| **Between-location delay** | Same uniform random wait as §3.1 after each location (including empty result); **defaults 3–8 s**, same **`--jitter-min-seconds` / `--jitter-max-seconds`** as between listing rows. |
+| **Between-location delay** | Same uniform random wait as §3.1 after each location (including empty result); **defaults 5–15 s**, same **`--jitter-min-seconds` / `--jitter-max-seconds`** as between listing rows. |
 | **Jitter CLI** | **`--jitter-min-seconds`**, **`--jitter-max-seconds`** — optional bounds (seconds); `min` ≤ `max`; both ≥ 0. |
 | **`--max-locations`** | Process only the first *N* seed rows (must match between resume attempts for a valid checkpoint). |
 | **Checkpoints** | Sidecar **`{--out}.seed_checkpoint.json`**; updated after each **successful** seed row; interactive **full vs resume** prompt when appropriate; non-TTY auto-resume; **`--fresh`** clears checkpoint; **`KeyboardInterrupt`** leaves last good checkpoint. |
@@ -276,4 +276,4 @@ Implement **CPA first** inside `sites/cpa_australia.py`; keep `core/` dumb and r
 
 ---
 
-*Document version: Playwright committed; Phase 0 API/browser verdict; polite jitter (defaults 3–8 s, CLI `--jitter-min-seconds` / `--jitter-max-seconds`); safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); Phase 3 checkpoints + dated `--out` convention (§7, 2026-04-08); checkpoint prompt before browser for `--input`; extensible layout.*
+*Document version: Playwright committed; Phase 0 API/browser verdict; polite jitter (defaults 5–15 s, CLI `--jitter-min-seconds` / `--jitter-max-seconds`); safety brakes (§3.2); seed data (§5.3); dedupe + geo strategy; Find a CPA results list — no pagination observed (§6, 2026-04-08); Phase 3 checkpoints + dated `--out` convention (§7, 2026-04-08); checkpoint prompt before browser for `--input`; extensible layout.*

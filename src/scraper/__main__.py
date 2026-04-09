@@ -313,16 +313,16 @@ def _main_impl(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--jitter-min-seconds",
         type=float,
-        default=3.0,
+        default=5.0,
         metavar="S",
-        help="Minimum random pause between Phase 3 seeds and between listing rows (default: 3)",
+        help="Minimum random pause between Phase 3 seeds and between listing rows (default: 5)",
     )
     run_p.add_argument(
         "--jitter-max-seconds",
         type=float,
-        default=8.0,
+        default=15.0,
         metavar="S",
-        help="Maximum for the same (default: 8)",
+        help="Maximum for the same (default: 15)",
     )
     run_p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
     run_p.add_argument(
