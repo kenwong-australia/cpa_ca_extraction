@@ -7,9 +7,11 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright, sync_playwright
 
 from scraper.core.browser import new_browser_context
 from scraper.core.checkpoint import (
@@ -31,6 +33,46 @@ from scraper.core.safety import SafetyBrakes
 from scraper.registry import SITE_REGISTRY
 
 _SIGINT_PREV_TIME: float | None = None
+
+_T = TypeVar("_T")
+
+
+def _run_with_one_shot_rate_limit_recovery(
+    p: Playwright,
+    *,
+    headed: bool,
+    wait_minutes: float | None,
+    browser: Browser,
+    context: BrowserContext,
+    page: Page,
+    work: Callable[[Page], _T],
+) -> tuple[_T, Browser, BrowserContext, Page]:
+    """
+    On RateLimitedError: if wait_minutes > 0, close browser, sleep, launch a fresh browser,
+    retry work() once. A second RateLimitedError is re-raised.
+    """
+    headless = not headed
+    allow = wait_minutes is not None and wait_minutes > 0
+    used_recovery = False
+    while True:
+        try:
+            result = work(page)
+            return result, browser, context, page
+        except RateLimitedError:
+            if not allow or used_recovery:
+                raise
+            used_recovery = True
+            print(
+                "\nRate limited — closing browser, waiting "
+                f"{wait_minutes:g} minute(s), then launching a fresh browser and "
+                "retrying this step once.",
+                file=sys.stderr,
+                flush=True,
+            )
+            browser.close()
+            time.sleep(float(wait_minutes) * 60.0)
+            browser, context, page = new_browser_context(p, headless=headless)
+
 
 # Phase 3 bundle built before Playwright so checkpoint prompts do not sit behind a silent headless window.
 _Phase3PreBrowser = tuple[
@@ -81,6 +123,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
     if args.jitter_min_seconds > args.jitter_max_seconds:
         print("--jitter-min-seconds must be <= --jitter-max-seconds", file=sys.stderr)
+        return 2
+    if args.rate_limit_wait_minutes is not None and args.rate_limit_wait_minutes < 0:
+        print("--rate-limit-wait-minutes cannot be negative", file=sys.stderr)
         return 2
 
     input_path = Path(args.input).resolve() if args.input else None
@@ -170,16 +215,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
                             flush=True,
                         )
                         try:
-                            batch = runner(
-                                page,
-                                out,
-                                location_query=loc,
-                                search_seed=seed,
-                                limit=args.limit,
-                                dedupe_seen=seen,
-                                brakes=shared,
-                                jitter_min_s=args.jitter_min_seconds,
-                                jitter_max_s=args.jitter_max_seconds,
+                            batch, browser, _ctx, page = _run_with_one_shot_rate_limit_recovery(
+                                p,
+                                headed=args.headed,
+                                wait_minutes=args.rate_limit_wait_minutes,
+                                browser=browser,
+                                context=_ctx,
+                                page=page,
+                                work=lambda pg: runner(
+                                    pg,
+                                    out,
+                                    location_query=loc,
+                                    search_seed=seed,
+                                    limit=args.limit,
+                                    dedupe_seen=seen,
+                                    brakes=shared,
+                                    jitter_min_s=args.jitter_min_seconds,
+                                    jitter_max_s=args.jitter_max_seconds,
+                                ),
                             )
                         except RateLimitedError:
                             raise
@@ -225,17 +278,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
                 rows = all_rows
             else:
-                rows = runner(
-                    page,
-                    out,
-                    location_query=args.location,
-                    search_seed=args.seed,
-                    limit=args.limit,
-                    max_consecutive_failures=args.max_consecutive_failures,
-                    max_search_retries=args.max_search_retries,
-                    wall_clock_seconds=wall_clock,
-                    jitter_min_s=args.jitter_min_seconds,
-                    jitter_max_s=args.jitter_max_seconds,
+                rows, browser, _ctx, page = _run_with_one_shot_rate_limit_recovery(
+                    p,
+                    headed=args.headed,
+                    wait_minutes=args.rate_limit_wait_minutes,
+                    browser=browser,
+                    context=_ctx,
+                    page=page,
+                    work=lambda pg: runner(
+                        pg,
+                        out,
+                        location_query=args.location,
+                        search_seed=args.seed,
+                        limit=args.limit,
+                        max_consecutive_failures=args.max_consecutive_failures,
+                        max_search_retries=args.max_search_retries,
+                        wall_clock_seconds=wall_clock,
+                        jitter_min_s=args.jitter_min_seconds,
+                        jitter_max_s=args.jitter_max_seconds,
+                    ),
                 )
         except RateLimitedError as exc:
             print(f"\n{exc}", file=sys.stderr, flush=True)
@@ -329,6 +390,17 @@ def _main_impl(argv: list[str] | None = None) -> int:
         "--fresh",
         action="store_true",
         help="With --input: ignore/delete seed checkpoint and start from seed 1",
+    )
+    run_p.add_argument(
+        "--rate-limit-wait-minutes",
+        type=float,
+        default=None,
+        metavar="N",
+        help=(
+            "On Cloudflare rate limit: close browser, wait N minutes once, open a fresh browser, "
+            "and retry the current location/seed once; if still blocked, exit 3. "
+            "Omit or use 0 to exit immediately (default)."
+        ),
     )
     run_p.set_defaults(func=_cmd_run)
 
