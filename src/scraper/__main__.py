@@ -110,7 +110,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"Unknown site {site!r}. Known: {', '.join(sorted(SITE_REGISTRY))}", file=sys.stderr)
         return 2
 
-    out = Path(args.out).resolve()
+    out_raw = (args.out or "").strip()
+    if not out_raw:
+        print(
+            "--out must be a non-empty CSV path (e.g. data/run_20260408_1458.csv). "
+            "If you use $OUT, set it in this shell first, e.g. OUT=data/run_20260408_1458.csv",
+            file=sys.stderr,
+        )
+        return 2
+    out = Path(out_raw).resolve()
+    if out.exists() and out.is_dir():
+        print(f"--out must be a CSV file path, not a directory: {out}", file=sys.stderr)
+        return 2
     runner = SITE_REGISTRY[site]
 
     wall_clock = args.wall_clock_seconds
