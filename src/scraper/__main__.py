@@ -8,6 +8,8 @@ import signal
 import sys
 import time
 from collections.abc import Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TypeVar
 
@@ -62,10 +64,13 @@ def _run_with_one_shot_rate_limit_recovery(
             if not allow or used_recovery:
                 raise
             used_recovery = True
+            sydney_ts = datetime.now(ZoneInfo("Australia/Sydney")).strftime(
+                "%Y-%m-%d %H:%M:%S %Z"
+            )
             print(
                 "\nRate limited — closing browser, waiting "
                 f"{wait_minutes:g} minute(s), then launching a fresh browser and "
-                "retrying this step once.",
+                f"retrying this step once. (Sydney local: {sydney_ts})",
                 file=sys.stderr,
                 flush=True,
             )
