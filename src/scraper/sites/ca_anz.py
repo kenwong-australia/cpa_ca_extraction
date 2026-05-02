@@ -126,11 +126,12 @@ def _post_getmembers(
     timeout_ms: float = 120_000,
 ) -> dict[str, Any]:
     ctx = page.context
+    # Playwright API: timeout is in **milliseconds** (see APIRequestContext.post docs).
     r = ctx.request.post(
         GET_MEMBERS_URL,
         data=json.dumps(payload),
         headers={"content-type": "application/json;charset=UTF-8"},
-        timeout=timeout_ms / 1000.0,
+        timeout=timeout_ms,
     )
     if r.status == 429:
         raise RateLimitedError(
