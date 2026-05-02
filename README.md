@@ -50,7 +50,7 @@ After the last line, you should see `Wrote 1 row(s) to …/data/run_….csv`. Fo
 
 ## CA ANZ — Find a CA (`ca_anz`)
 
-CA ANZ uses the site JSON API (`POST …/api/FindACAV2/GetMembers`). **Use `--headed`** (headless often hits Cloudflare / reCAPTCHA).
+CA ANZ loads the first batch from the site’s **`GetMembers`** call, then paginates by clicking **Load more** (replaying `token`+`offset` yourself often returns 403/500). **Use `--headed`** (headless often hits Cloudflare / reCAPTCHA).
 
 ```bash
 OUT="data/ca_anz_$(date +%Y%m%d_%H%M).csv"

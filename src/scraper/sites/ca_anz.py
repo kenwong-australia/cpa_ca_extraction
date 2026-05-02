@@ -1,4 +1,4 @@
-"""CA ANZ — Find a CA via POST /api/FindACAV2/GetMembers (Playwright + APIRequestContext)."""
+"""CA ANZ — Find a CA: first batch from GetMembers (navigation); further pages via **Load more**."""
 
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ from scraper.core.dedupe import dedupe_key_normalised
 from scraper.core.delays import sleep_random
 from scraper.core.interruptible import interruptible_page_wait_ms
 from scraper.core.models import ContactRecord, RunContext
-from scraper.core.rate_limit import RateLimitedError, raise_if_rate_limited
+from scraper.core.rate_limit import raise_if_rate_limited
 from scraper.core.safety import SafetyBrakes
 
-GET_MEMBERS_URL = "https://www.charteredaccountantsanz.com/api/FindACAV2/GetMembers"
+# Must match `new_browser_context` default in `core/browser.py`.
+_PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS = 60_000
 
 _NAME_WITH_DISPLAY_RE = re.compile(
     r"^(.+?)\s+(.+?)\s+\(([^)]*)\)\s*$",
@@ -119,31 +120,31 @@ def _capture_first_getmembers(
     return first_data, template
 
 
-def _post_getmembers(
+def _fetch_next_batch_via_load_more(
     page: Page,
-    payload: dict[str, Any],
     *,
     timeout_ms: float = 120_000,
-) -> dict[str, Any]:
-    ctx = page.context
-    # Playwright API: timeout is in **milliseconds** (see APIRequestContext.post docs).
-    r = ctx.request.post(
-        GET_MEMBERS_URL,
-        data=json.dumps(payload),
-        headers={"content-type": "application/json;charset=UTF-8"},
-        timeout=timeout_ms,
-    )
-    if r.status == 429:
-        raise RateLimitedError(
-            "Rate limited or blocked (HTTP 429 on GetMembers). "
-            "Wait and re-run with the same --out to resume from checkpoint.",
-        )
-    if r.status != 200:
-        raise RuntimeError(f"GetMembers failed: HTTP {r.status} {r.status_text!r}")
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Click **Load more**, return (response_json, request_body_dict) from the GetMembers XHR."""
+    page.set_default_timeout(int(timeout_ms))
     try:
-        return r.json()
+        with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
+            btn = page.get_by_role("button", name=re.compile(r"load\s*more", re.I))
+            btn.first.scroll_into_view_if_needed()
+            btn.first.click()
+        resp = info.value
+    finally:
+        page.set_default_timeout(_PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS)
+
+    try:
+        data = resp.json()
     except Exception as e:
-        raise RuntimeError("GetMembers body was not JSON.") from e
+        raise RuntimeError("Load more GetMembers response was not JSON.") from e
+    try:
+        template = json.loads(resp.request.post_data or "{}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError("Load more GetMembers request body was not JSON.") from e
+    return data, template
 
 
 def run_ca_anz(
@@ -189,8 +190,7 @@ def run_ca_anz(
     template = dict(template)
     template["postcode"] = postcode
     template["country"] = template.get("country") or "Australia"
-    token = (template.get("token") or "").strip()
-    if not token:
+    if not (template.get("token") or "").strip():
         raise RuntimeError(
             "Empty GetMembers token — try --headed, --manual-gate, or complete any checks in the browser.",
         )
@@ -254,21 +254,35 @@ def run_ca_anz(
     if not isinstance(batch0, list):
         batch0 = []
     process_batch(batch0)
-    next_offset = int(template.get("offset") or 0) + len(batch0)
+    rows_delivered = len(batch0)
 
-    api_calls = 0
-    while next_offset < total_count and (limit is None or written < limit):
+    # Further pages: only **Load more** (replaying token+offset via fetch often yields 403/500).
+    load_more_round = 0
+    while rows_delivered < total_count and (limit is None or written < limit):
         brakes.check_wall_clock()
-        if api_calls > 0:
+        btn = page.get_by_role("button", name=re.compile(r"load\s*more", re.I))
+        if btn.count() == 0:
+            break
+        try:
+            if not btn.first.is_visible(timeout=3_000):
+                break
+        except Exception:
+            break
+        if load_more_round > 0:
             sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
-        payload = {**template, "offset": next_offset, "postcode": postcode, "token": token}
-        data = _post_getmembers(page, payload)
+        try:
+            data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=120_000)
+        except Exception as exc:
+            print(f"Load more failed or timed out: {exc}", flush=True)
+            break
         batch = data.get("searchDetails") or []
         if not batch:
             break
         process_batch(batch)
-        next_offset += len(batch)
-        api_calls += 1
+        rows_delivered += len(batch)
+        load_more_round += 1
+        template.update(refreshed)
+        template["postcode"] = postcode
 
     return records_out
 
