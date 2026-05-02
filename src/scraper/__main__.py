@@ -1,4 +1,9 @@
-"""CLI: python -m scraper run --site cpa_au --out path.csv"""
+"""CLI: python -m scraper run --site cpa_au --out path.csv
+
+Manual gate for CA ANZ / Playwright debugging:
+  python -m scraper pause-demo --headed
+  PWDEBUG=1 may be needed if the Inspector does not appear.
+"""
 
 from __future__ import annotations
 
@@ -39,6 +44,12 @@ _SIGINT_PREV_TIME: float | None = None
 _SITE_CHOICES: dict[str, str] = {
     "cpa_au": "CPA Australia — Find a CPA (apps.cpaaustralia.com.au)",
 }
+
+_DEFAULT_CA_ANZ_PAUSE_DEMO_URL = (
+    "https://www.charteredaccountantsanz.com/find-a-ca/search-results-for-a-ca"
+    "?country=Australia&selectedType=All&postcode=2000&formType=specifications"
+    "&limit=20&firstName=&lastName=&business="
+)
 
 
 def _prompt_site_interactive() -> str:
@@ -374,6 +385,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pause_demo(args: argparse.Namespace) -> int:
+    """
+    Open Playwright's browser, navigate, then page.pause() for manual steps + Inspector resume.
+    Default: headed (visible window). Use for CA ANZ warm-up before API/DOM automation continues.
+    """
+    url = (args.url or "").strip() or _DEFAULT_CA_ANZ_PAUSE_DEMO_URL
+    headed = not args.headless
+    print(
+        "\nManual gate (pause-demo)\n"
+        "— A browser window opens (unless --headless).\n"
+        "— The Playwright Inspector should open when the pause triggers.\n"
+        "— Use the browser as needed, then click Resume ▶ in the Inspector to continue.\n"
+        "— If no Inspector: try  PWDEBUG=1  in front of the same command.\n",
+        flush=True,
+    )
+    with sync_playwright() as p:
+        browser, _ctx, page = new_browser_context(p, headless=not headed)
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+            page.pause()
+            try:
+                n_cards = page.locator(".card-section").count()
+            except Exception:
+                n_cards = -1
+            print(
+                f"Resumed. title={page.title()!r}  .card-section count={n_cards}",
+                flush=True,
+            )
+        finally:
+            browser.close()
+    return 0
+
+
 def _main_impl(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="scraper", description="Contact extraction CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -466,6 +510,26 @@ def _main_impl(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.set_defaults(func=_cmd_run)
+
+    pause_p = sub.add_parser(
+        "pause-demo",
+        help=(
+            "Open a headed browser, load a URL (default CA ANZ results), "
+            "then page.pause() until you Resume in the Playwright Inspector"
+        ),
+    )
+    pause_p.add_argument(
+        "--url",
+        default=None,
+        metavar="URL",
+        help=f"Page to open before pause (default: CA ANZ sample results URL)",
+    )
+    pause_p.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without a window (not recommended; pause is for manual interaction)",
+    )
+    pause_p.set_defaults(func=_cmd_pause_demo)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
