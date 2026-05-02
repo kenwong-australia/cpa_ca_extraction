@@ -43,6 +43,7 @@ _SIGINT_PREV_TIME: float | None = None
 
 _SITE_CHOICES: dict[str, str] = {
     "cpa_au": "CPA Australia — Find a CPA (apps.cpaaustralia.com.au)",
+    "ca_anz": "CA ANZ — Find a CA (charteredaccountantsanz.com)",
 }
 
 _DEFAULT_CA_ANZ_PAUSE_DEMO_URL = (
@@ -175,6 +176,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
     runner = SITE_REGISTRY[site]
 
+    if site == "ca_anz" and not args.headed:
+        print(
+            "CA ANZ is unreliable in headless mode (Cloudflare / reCAPTCHA). "
+            "Use --headed or ./run_scraper.sh run --site ca_anz …",
+            file=sys.stderr,
+            flush=True,
+        )
+
     wall_clock = args.wall_clock_seconds
     if wall_clock is not None and wall_clock <= 0:
         print("--wall-clock-seconds must be positive", file=sys.stderr)
@@ -292,7 +301,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                 browser=browser,
                                 context=_ctx,
                                 page=page,
-                                work=lambda pg: runner(
+                                work=lambda pg, i=i, st=start_index: runner(
                                     pg,
                                     out,
                                     location_query=loc,
@@ -302,6 +311,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     brakes=shared,
                                     jitter_min_s=args.jitter_min_seconds,
                                     jitter_max_s=args.jitter_max_seconds,
+                                    manual_gate=args.manual_gate
+                                    and site == "ca_anz"
+                                    and i == st,
                                 ),
                             )
                         except RateLimitedError:
@@ -366,6 +378,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         wall_clock_seconds=wall_clock,
                         jitter_min_s=args.jitter_min_seconds,
                         jitter_max_s=args.jitter_max_seconds,
+                        manual_gate=args.manual_gate and site == "ca_anz",
                     ),
                 )
         except RateLimitedError as exc:
@@ -491,6 +504,14 @@ def _main_impl(argv: list[str] | None = None) -> int:
         default=15.0,
         metavar="S",
         help="Maximum for the same (default: 15)",
+    )
+    run_p.add_argument(
+        "--manual-gate",
+        action="store_true",
+        help=(
+            "CA ANZ only: open Playwright pause once at the start (with --input: first resumed seed only); "
+            "after Resume the page reloads to capture GetMembers. Requires --headed for practical use."
+        ),
     )
     run_p.add_argument("--headed", action="store_true", help="Show browser (default: headless)")
     run_p.add_argument(

@@ -9,6 +9,7 @@ from playwright.sync_api import Page
 
 from scraper.core.models import ContactRecord
 from scraper.core.safety import SafetyBrakes
+from scraper.sites.ca_anz import run_ca_anz_cli
 from scraper.sites.cpa_australia import run_cpa_au_cli
 
 
@@ -28,12 +29,14 @@ class SiteRunner(Protocol):
         brakes: SafetyBrakes | None = None,
         jitter_min_s: float = 5.0,
         jitter_max_s: float = 15.0,
+        manual_gate: bool = False,
     ) -> list[ContactRecord]: ...
 
 
 SITE_REGISTRY: dict[str, SiteRunner] = {
     "cpa_au": run_cpa_au_cli,
+    "ca_anz": run_ca_anz_cli,
 }
 
 # Sites whose --input CSV uses load_postcode_seed_placements (postcode typed as search_query).
-POSTCODE_SEED_SITES: frozenset[str] = frozenset()
+POSTCODE_SEED_SITES: frozenset[str] = frozenset({"ca_anz"})

@@ -553,6 +553,7 @@ def run_cpa_au_cli(
     brakes: SafetyBrakes | None = None,
     jitter_min_s: float = 5.0,
     jitter_max_s: float = 15.0,
+    manual_gate: bool = False,  # noqa: ARG001 — CA ANZ only; ignored for CPA AU.
 ) -> list[ContactRecord]:
     """CLI entry: builds `SafetyBrakes` from flags unless `brakes` is passed (Phase 3 multi-run)."""
     brakes = brakes or SafetyBrakes(

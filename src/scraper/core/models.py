@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -13,6 +13,10 @@ CSV_FIELDNAMES: list[str] = [
     "phone",
     "email",
     "website",
+    "first_name",
+    "last_name",
+    "display_name",
+    "designation",
     "site_id",
     "run_date",
     "run_timestamp_utc",
@@ -52,6 +56,10 @@ class ContactRecord:
     phone: str = ""
     email: str = ""
     website: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    display_name: str = ""
+    designation: str = ""
     site_id: str = ""
     run_date: str = ""
     run_timestamp_utc: str = ""
@@ -79,6 +87,10 @@ class ContactRecord:
         phone: str = "",
         email: str = "",
         website: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        display_name: str = "",
+        designation: str = "",
         listing_id: str = "",
         listing_url: str = "",
         raw_listing_token: str = "",
@@ -93,6 +105,10 @@ class ContactRecord:
             phone=phone,
             email=email,
             website=website,
+            first_name=first_name,
+            last_name=last_name,
+            display_name=display_name,
+            designation=designation,
             site_id=ctx.site_id,
             run_date=run_date,
             run_timestamp_utc=run_ts,

@@ -1,6 +1,6 @@
 # cpa_ca_extraction
 
-Extract CPA practice contacts from [CPA Australia — Find a CPA](https://apps.cpaaustralia.com.au/find-a-cpa/). Implementation follows `docs/implementation-plan.md` (Playwright, phased rollout).
+Extract practice contacts from [CPA Australia — Find a CPA](https://apps.cpaaustralia.com.au/find-a-cpa/) and from [CA ANZ — Find a CA](https://www.charteredaccountantsanz.com/find-a-ca). Playwright-based; see `docs/implementation-plan.md` and `docs/ca-anz-phase0-discovery.md`.
 
 ## Setup
 
@@ -47,6 +47,23 @@ This block is **not** a different app: `[[ -d .venv ]] || ./scripts/setup.sh` ru
 After the last line, you should see `Wrote 1 row(s) to …/data/run_….csv`. For more rows, change `--limit` or remove it for the full list (slow). To refresh dependencies later, run `./scripts/setup.sh` again.
 
 **Output CSV naming:** Prefer a **datetime-stamped** `--out` path (as above: `run_$(date +%Y%m%d_%H%M).csv`) so each run has its own file and checkpoints stay tied to that file. Plain names like `data/run.csv` are fine for quick tests.
+
+## CA ANZ — Find a CA (`ca_anz`)
+
+CA ANZ uses the site JSON API (`POST …/api/FindACAV2/GetMembers`). **Use `--headed`** (headless often hits Cloudflare / reCAPTCHA).
+
+```bash
+OUT="data/ca_anz_$(date +%Y%m%d_%H%M).csv"
+./run_scraper.sh run --site ca_anz --headed --out "$OUT" --location 3000 --seed "Melbourne,VIC,3000" --limit 40
+```
+
+Optional **`--manual-gate`**: Playwright **Inspector** pause once at the start (with `--input`, only on the **first seed** of that run — the resumed index after a checkpoint). After **Resume**, the page **reloads** to capture `GetMembers`. Useful when the site is picky about session/`token`.
+
+```bash
+./run_scraper.sh run --site ca_anz --headed --out "$OUT" --input data/seeds_ca_anz_cbd.csv --manual-gate
+```
+
+Seed file for CA ANZ: **`city,state,postcode`** columns (e.g. `data/seeds_ca_anz_cbd.csv`). Checkpoints use the same sidecar as CPA: **`$OUT.seed_checkpoint.json`**.
 
 ## Phase 2 — full result list (one search)
 
