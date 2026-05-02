@@ -45,3 +45,48 @@ def load_seed_placements(path: Path) -> list[tuple[str, str]]:
             search_seed = f"{suburb},{state},{pc}" if pc else f"{suburb},{state}"
             rows.append((location_query, search_seed))
     return rows
+
+
+def load_postcode_seed_placements(path: Path) -> list[tuple[str, str]]:
+    """
+    CA ANZ style seeds: at least `postcode`.
+
+    Returns (location_query, search_seed):
+    - location_query: the postcode string typed into the site's location field;
+    - search_seed: provenance, e.g. city,state,postcode when city/state columns exist.
+    """
+    rows: list[tuple[str, str]] = []
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        if not reader.fieldnames:
+            return rows
+        fn = {h.strip().lower(): h for h in reader.fieldnames if h}
+
+        def col(name: str) -> str | None:
+            key = fn.get(name.lower())
+            if not key:
+                return None
+            return key
+
+        k_pc = col("postcode")
+        if not k_pc:
+            raise ValueError(
+                f"Postcode seed CSV {path} must include a 'postcode' column "
+                f"(found: {reader.fieldnames!r})",
+            )
+        k_city = col("city") or col("suburb")
+        k_state = col("state")
+
+        for raw in reader:
+            pc = (raw.get(k_pc) or "").strip()
+            if not pc:
+                continue
+            location_query = pc
+            if k_city and k_state:
+                city = (raw.get(k_city) or "").strip()
+                state = (raw.get(k_state) or "").strip()
+                search_seed = f"{city},{state},{pc}" if city and state else pc
+            else:
+                search_seed = pc
+            rows.append((location_query, search_seed))
+    return rows

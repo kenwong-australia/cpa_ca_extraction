@@ -29,12 +29,50 @@ from scraper.core.checkpoint import (
 )
 from scraper.core.csv_sink import read_existing_dedupe_keys
 from scraper.core.delays import sleep_random
-from scraper.core.seeds import load_seed_placements
 from scraper.core.rate_limit import RateLimitedError
 from scraper.core.safety import SafetyBrakes
-from scraper.registry import SITE_REGISTRY
+from scraper.core.seeds import load_postcode_seed_placements, load_seed_placements
+from scraper.registry import POSTCODE_SEED_SITES, SITE_REGISTRY
 
 _SIGINT_PREV_TIME: float | None = None
+
+_SITE_CHOICES: dict[str, str] = {
+    "cpa_au": "CPA Australia — Find a CPA (apps.cpaaustralia.com.au)",
+}
+
+
+def _prompt_site_interactive() -> str:
+    """Numbered menu of registered sites (TTY only)."""
+    items = sorted(SITE_REGISTRY.items())
+    print("Select site:", flush=True)
+    for i, (key, _) in enumerate(items, start=1):
+        desc = _SITE_CHOICES.get(key, "")
+        suffix = f" — {desc}" if desc else ""
+        print(f"  [{i}] {key}{suffix}", flush=True)
+    while True:
+        raw = input("Enter number: ").strip()
+        try:
+            n = int(raw)
+        except ValueError:
+            print("Please enter a valid number.", flush=True)
+            continue
+        if 1 <= n <= len(items):
+            return items[n - 1][0]
+        print(f"Enter a number from 1 to {len(items)}.", flush=True)
+
+
+def _resolve_site_arg(site_arg: str | None) -> str | None:
+    if site_arg:
+        return site_arg.strip()
+    if not sys.stdin.isatty():
+        print(
+            "Missing --site. Known: "
+            + ", ".join(sorted(SITE_REGISTRY))
+            + ". (Interactive picker needs a TTY.)",
+            file=sys.stderr,
+        )
+        return None
+    return _prompt_site_interactive()
 
 _T = TypeVar("_T")
 
@@ -105,7 +143,9 @@ def _install_sigint_second_forces_exit():
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    site = args.site
+    site = _resolve_site_arg(args.site)
+    if site is None:
+        return 2
     if site not in SITE_REGISTRY:
         print(f"Unknown site {site!r}. Known: {', '.join(sorted(SITE_REGISTRY))}", file=sys.stderr)
         return 2
@@ -153,11 +193,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     phase3_pre: _Phase3PreBrowser | None = None
     if input_path is not None:
-        placements = load_seed_placements(input_path)
+        if site in POSTCODE_SEED_SITES:
+            placements = load_postcode_seed_placements(input_path)
+        else:
+            placements = load_seed_placements(input_path)
         if args.max_locations is not None:
             placements = placements[: args.max_locations]
         if not placements:
-            print("No seed rows to process (check CSV suburb/state).", file=sys.stderr)
+            print("No seed rows to process (check seed CSV columns).", file=sys.stderr)
             return 2
         seen = read_existing_dedupe_keys(out)
         shared = SafetyBrakes(
@@ -336,7 +379,11 @@ def _main_impl(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_p = sub.add_parser("run", help="Run a site scraper")
-    run_p.add_argument("--site", required=True, help="Site id (e.g. cpa_au)")
+    run_p.add_argument(
+        "--site",
+        default=None,
+        help="Site id (e.g. cpa_au). Omit for an interactive menu in the terminal.",
+    )
     run_p.add_argument("--out", required=True, help="Output CSV path")
     run_p.add_argument(
         "--input",

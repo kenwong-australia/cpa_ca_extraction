@@ -34,3 +34,6 @@ class SiteRunner(Protocol):
 SITE_REGISTRY: dict[str, SiteRunner] = {
     "cpa_au": run_cpa_au_cli,
 }
+
+# Sites whose --input CSV uses load_postcode_seed_placements (postcode typed as search_query).
+POSTCODE_SEED_SITES: frozenset[str] = frozenset()
