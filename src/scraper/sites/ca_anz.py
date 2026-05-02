@@ -128,7 +128,8 @@ def _post_getmembers(
     ctx = page.context
     r = ctx.request.post(
         GET_MEMBERS_URL,
-        json=payload,
+        data=json.dumps(payload),
+        headers={"content-type": "application/json;charset=UTF-8"},
         timeout=timeout_ms / 1000.0,
     )
     if r.status == 429:
