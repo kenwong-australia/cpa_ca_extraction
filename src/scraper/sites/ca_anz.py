@@ -38,22 +38,33 @@ def results_page_url(*, postcode: str) -> str:
 def parse_member_name_fields(
     name_raw: str,
     designation: str,
+    *,
+    preferred_name: str = "",
 ) -> tuple[str, str, str, str]:
     """
     Return (first_name, last_name, display_name, designation).
     Designation usually comes from API; name may be 'First Last (Display)'.
+    If there is no parenthetical display name, uses PreferredName when present.
     """
     raw = (name_raw or "").strip()
     desig = (designation or "").strip()
+    pref = (preferred_name or "").strip()
     m = _NAME_WITH_DISPLAY_RE.match(raw)
     if m:
-        return m.group(1).strip(), m.group(2).strip(), m.group(3).strip(), desig
-    parts = raw.split()
-    if len(parts) >= 2:
-        return parts[0], parts[-1], "", desig
-    if raw:
-        return raw, "", "", desig
-    return "", "", "", desig
+        fn = m.group(1).strip()
+        ln = m.group(2).strip()
+        disp = m.group(3).strip()
+    else:
+        parts = raw.split()
+        if len(parts) >= 2:
+            fn, ln, disp = parts[0], parts[-1], ""
+        elif raw:
+            fn, ln, disp = raw, "", ""
+        else:
+            fn, ln, disp = "", "", ""
+    if not disp and pref:
+        disp = pref
+    return fn, ln, disp, desig
 
 
 def _listing_id_from_row(row: dict[str, Any]) -> str:
@@ -208,6 +219,7 @@ def run_ca_anz(
             fn, ln, disp, desig = parse_member_name_fields(
                 str(row.get("Name") or ""),
                 str(row.get("Designation") or ""),
+                preferred_name=str(row.get("PreferredName") or ""),
             )
             company = str(row.get("Company") or "").strip()
             address = str(row.get("BusinessAddress") or "").strip()
