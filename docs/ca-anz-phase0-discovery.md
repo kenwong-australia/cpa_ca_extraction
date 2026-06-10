@@ -66,6 +66,8 @@ When **Load More** is clicked **manually**, DevTools shows at least:
 
 **Parallel experiment:** In a **new tab**, paste a **full results URL** with a different `postcode` (e.g. `3000`) **without** visiting the form first. Record whether the table loads or you get an error/redirect.
 
+**Multi-postcode automation (2026-06):** In the **same tab** after seed 1, **`page.goto`** to a new `postcode=` results URL often **does not** produce a fresh **`GetMembers`** call (Melbourne/Brisbane/Adelaide skipped in batched runs). The site expects the **on-page postcode field + red Search button** (`button.btn.btn-result`, label **Search**) — same control family as **Load More**. Phase 1 **`ca_anz.py`** uses form Search when already on `/find-a-ca`; cold loads still use results URL **`goto`**.
+
 ---
 
 ## 4. DOM / accessibility (headed probe — 2026-05-03)

@@ -93,13 +93,88 @@ def _getmembers_response_ok(resp: Response) -> bool:
         return False
 
 
+def _parse_getmembers_response(resp: Response) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        first_data = resp.json()
+    except Exception as e:
+        raise RuntimeError("GetMembers response was not JSON.") from e
+    try:
+        template = json.loads(resp.request.post_data or "{}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError("GetMembers request body was not JSON.") from e
+    return first_data, template
+
+
+def _on_ca_anz_find_ca_page(page: Page) -> bool:
+    u = page.url or ""
+    return "charteredaccountantsanz.com" in u and "find-a-ca" in u
+
+
+_SEARCH_BTN_RE = re.compile(r"^\s*search\s*$", re.I)
+
+
+def _postcode_input_locator(page: Page):
+    for sel in (
+        'input[name="postcode"]',
+        'input[id="postcode"]',
+        'input[id*="postcode" i]',
+        'input[placeholder*="postcode" i]',
+        'input[aria-label*="postcode" i]',
+    ):
+        loc = page.locator(sel).first
+        if loc.count() and loc.is_visible():
+            return loc
+    skip = page.locator(
+        'input[name="firstName"], input[name="lastName"], input[name="business"]',
+    )
+    candidates = page.locator('input[type="text"]:visible').filter(has_not=skip)
+    if candidates.count():
+        return candidates.first
+    return page.locator('input[type="text"]').first
+
+
+def _search_button_locator(page: Page):
+    btn = page.get_by_role("button", name=_SEARCH_BTN_RE)
+    if btn.count():
+        return btn.first
+    return page.locator("button.btn.btn-result").filter(has_text=_SEARCH_BTN_RE).first
+
+
+def _search_postcode_via_form(page: Page, postcode: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Submit a new postcode using the on-page Search control (red btn-result)."""
+    pc = (postcode or "").strip()
+    if not pc:
+        raise RuntimeError("postcode is empty.")
+    raise_if_rate_limited(page)
+    inp = _postcode_input_locator(page)
+    if inp.count() == 0:
+        raise RuntimeError("Could not find postcode field on CA ANZ page.")
+    search = _search_button_locator(page)
+    if search.count() == 0:
+        raise RuntimeError("Could not find Search button on CA ANZ page.")
+    with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
+        inp.scroll_into_view_if_needed()
+        inp.click()
+        inp.fill(pc)
+        search.scroll_into_view_if_needed()
+        search.click()
+    return _parse_getmembers_response(info.value)
+
+
 def _capture_first_getmembers(
     page: Page,
     url: str,
+    postcode: str,
     *,
     manual_gate: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Arm response listener, navigate or reload, return (response_json, request_body_dict)."""
+    """
+    Arm response listener and capture the first GetMembers batch.
+
+    Fresh tab: navigate to the results URL (works headed on cold load).
+    Already on find-a-ca (multi-postcode run): use the on-page Search button —
+    URL-only goto often does not fire GetMembers for the new postcode.
+    """
     if manual_gate:
         page.goto(url, wait_until="domcontentloaded", timeout=120_000)
         interruptible_page_wait_ms(page, 1_500)
@@ -114,21 +189,25 @@ def _capture_first_getmembers(
         raise_if_rate_limited(page)
         with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
             page.reload(wait_until="domcontentloaded", timeout=120_000)
-        resp = info.value
-    else:
-        with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
-            page.goto(url, wait_until="domcontentloaded", timeout=120_000)
-        resp = info.value
+        return _parse_getmembers_response(info.value)
 
-    try:
-        first_data = resp.json()
-    except Exception as e:
-        raise RuntimeError("GetMembers response was not JSON.") from e
-    try:
-        template = json.loads(resp.request.post_data or "{}")
-    except json.JSONDecodeError as e:
-        raise RuntimeError("GetMembers request body was not JSON.") from e
-    return first_data, template
+    if _on_ca_anz_find_ca_page(page):
+        print(
+            f"Postcode change: submitting {postcode!r} via on-page Search "
+            f"(already on find-a-ca; URL-only goto is unreliable here).",
+            flush=True,
+        )
+        try:
+            return _search_postcode_via_form(page, postcode)
+        except Exception as form_exc:
+            print(
+                f"On-page Search failed ({form_exc}); falling back to results URL navigation.",
+                flush=True,
+            )
+
+    with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
+        page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+    return _parse_getmembers_response(info.value)
 
 
 def _fetch_next_batch_via_load_more(
@@ -187,6 +266,7 @@ def run_ca_anz(
         first_data, template = _capture_first_getmembers(
             page,
             url,
+            postcode,
             manual_gate=manual_gate,
         )
     except Exception as e:
