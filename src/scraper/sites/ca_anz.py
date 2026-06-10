@@ -21,6 +21,8 @@ from scraper.core.safety import SafetyBrakes
 # Must match `new_browser_context` default in `core/browser.py`.
 _PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS = 60_000
 
+FIND_CA_LANDING_URL = "https://www.charteredaccountantsanz.com/find-a-ca"
+
 _NAME_WITH_DISPLAY_RE = re.compile(
     r"^(.+?)\s+(.+?)\s+\(([^)]*)\)\s*$",
 )
@@ -110,7 +112,14 @@ def _on_ca_anz_find_ca_page(page: Page) -> bool:
     return "charteredaccountantsanz.com" in u and "find-a-ca" in u
 
 
-_SEARCH_BTN_RE = re.compile(r"^\s*search\s*$", re.I)
+def _on_ca_anz_landing_form(page: Page) -> bool:
+    u = page.url or ""
+    return "charteredaccountantsanz.com" in u and u.rstrip("/").endswith("/find-a-ca")
+
+
+# Site button label is "Search →" (not plain "Search").
+_SEARCH_BTN_RE = re.compile(r"search", re.I)
+_LOAD_MORE_BTN_RE = re.compile(r"load\s*more", re.I)
 
 
 def _postcode_input_locator(page: Page):
@@ -120,6 +129,7 @@ def _postcode_input_locator(page: Page):
         'input[id*="postcode" i]',
         'input[placeholder*="postcode" i]',
         'input[aria-label*="postcode" i]',
+        'input[placeholder*="City, Suburb" i]',
     ):
         loc = page.locator(sel).first
         if loc.count() and loc.is_visible():
@@ -134,30 +144,79 @@ def _postcode_input_locator(page: Page):
 
 
 def _search_button_locator(page: Page):
-    btn = page.get_by_role("button", name=_SEARCH_BTN_RE)
-    if btn.count():
-        return btn.first
+    for loc in (
+        page.get_by_role("button", name=_SEARCH_BTN_RE),
+        page.locator("button.btn.btn-result").filter(has_text=_SEARCH_BTN_RE),
+        page.locator("button").filter(has_text=_SEARCH_BTN_RE),
+    ):
+        if loc.count():
+            btn = loc.filter(has_not_text=_LOAD_MORE_BTN_RE).first
+            if btn.count():
+                return btn
     return page.locator("button.btn.btn-result").filter(has_text=_SEARCH_BTN_RE).first
 
 
+def _fill_postcode_field(page: Page, postcode: str) -> None:
+    inp = _postcode_input_locator(page)
+    if inp.count() == 0:
+        raise RuntimeError("Could not find postcode field on CA ANZ page.")
+    inp.scroll_into_view_if_needed()
+    inp.click()
+    inp.fill("")
+    inp.fill((postcode or "").strip())
+
+
+def _capture_via_results_url(page: Page, url: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
+        page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+    return _parse_getmembers_response(info.value)
+
+
+def _capture_postcode_via_landing_reset(
+    page: Page,
+    url: str,
+    postcode: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """
+    Reset SPA state via the landing form URL, then open the results URL.
+
+    Avoids clicking Search after a long session — manual/automated Search clicks can
+    trigger ``RangeError: Maximum call stack size exceeded`` in findca-searchV2.min.js.
+    """
+    print(
+        f"Postcode change: landing reset, then results URL for {postcode!r} "
+        f"(skipping Search click — site JS can stack-overflow after long runs).",
+        flush=True,
+    )
+    page.goto(FIND_CA_LANDING_URL, wait_until="domcontentloaded", timeout=120_000)
+    interruptible_page_wait_ms(page, 1_500)
+    raise_if_rate_limited(page)
+    return _capture_via_results_url(page, url)
+
+
 def _search_postcode_via_form(page: Page, postcode: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Submit a new postcode using the on-page Search control (red btn-result)."""
+    """
+    Submit postcode on the landing form. Prefer Enter over Search click when possible.
+    """
     pc = (postcode or "").strip()
     if not pc:
         raise RuntimeError("postcode is empty.")
     raise_if_rate_limited(page)
-    inp = _postcode_input_locator(page)
-    if inp.count() == 0:
-        raise RuntimeError("Could not find postcode field on CA ANZ page.")
+    if not _on_ca_anz_landing_form(page):
+        page.goto(FIND_CA_LANDING_URL, wait_until="domcontentloaded", timeout=120_000)
+        interruptible_page_wait_ms(page, 1_000)
+        raise_if_rate_limited(page)
+    _fill_postcode_field(page, pc)
     search = _search_button_locator(page)
-    if search.count() == 0:
-        raise RuntimeError("Could not find Search button on CA ANZ page.")
     with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
-        inp.scroll_into_view_if_needed()
-        inp.click()
-        inp.fill(pc)
-        search.scroll_into_view_if_needed()
-        search.click()
+        try:
+            inp = _postcode_input_locator(page)
+            inp.press("Enter")
+        except Exception:
+            if search.count() == 0:
+                raise RuntimeError("Could not find Search button on CA ANZ page.") from None
+            search.scroll_into_view_if_needed()
+            search.click()
     return _parse_getmembers_response(info.value)
 
 
@@ -192,22 +251,22 @@ def _capture_first_getmembers(
         return _parse_getmembers_response(info.value)
 
     if _on_ca_anz_find_ca_page(page):
-        print(
-            f"Postcode change: submitting {postcode!r} via on-page Search "
-            f"(already on find-a-ca; URL-only goto is unreliable here).",
-            flush=True,
-        )
+        try:
+            return _capture_postcode_via_landing_reset(page, url, postcode)
+        except Exception as reset_exc:
+            print(
+                f"Landing reset failed ({reset_exc}); trying form submit.",
+                flush=True,
+            )
         try:
             return _search_postcode_via_form(page, postcode)
         except Exception as form_exc:
             print(
-                f"On-page Search failed ({form_exc}); falling back to results URL navigation.",
+                f"Form submit failed ({form_exc}); falling back to results URL navigation.",
                 flush=True,
             )
 
-    with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
-        page.goto(url, wait_until="domcontentloaded", timeout=120_000)
-    return _parse_getmembers_response(info.value)
+    return _capture_via_results_url(page, url)
 
 
 def _fetch_next_batch_via_load_more(
