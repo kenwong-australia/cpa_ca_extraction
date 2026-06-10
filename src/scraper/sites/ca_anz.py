@@ -120,6 +120,94 @@ def _on_ca_anz_landing_form(page: Page) -> bool:
 # Site button label is "Search →" (not plain "Search").
 _SEARCH_BTN_RE = re.compile(r"search", re.I)
 _LOAD_MORE_BTN_RE = re.compile(r"load\s*more", re.I)
+_QUALTRICS_SURVEY_RE = re.compile(
+    r"still browsing|satisfied with your experience|share your feedback",
+    re.I,
+)
+
+
+def _try_click_visible(page: Page, locator, *, timeout_ms: float = 2_000) -> bool:
+    try:
+        if locator.count() == 0:
+            return False
+        target = locator.first
+        if not target.is_visible(timeout=500):
+            return False
+        target.click(timeout=timeout_ms)
+        interruptible_page_wait_ms(page, 300)
+        return True
+    except Exception:
+        return False
+
+
+def _dismiss_ca_anz_overlays(page: Page) -> bool:
+    """
+    Close Qualtrics satisfaction surveys and similar modals that block Search / Load more.
+
+    CA ANZ sometimes shows: "How satisfied are you with your experience…" (Qualtrics).
+    """
+    closed = False
+
+    qualtrics = page.locator('[class*="QSIWebResponsive"]')
+    if qualtrics.count():
+        for sel in (
+            '[class*="QSIWebResponsive"] [role="button"][aria-label*="close" i]',
+            '[class*="QSIWebResponsive"] button[aria-label*="close" i]',
+            '[class*="QSIWebResponsive"] [class*="close-button"]',
+            '[class*="QSIWebResponsive"] [class*="CloseButton"]',
+            '[class*="QSIWebResponsive"] button:has-text("×")',
+            '[class*="QSIWebResponsive"] button:has-text("Close")',
+        ):
+            if _try_click_visible(page, page.locator(sel)):
+                closed = True
+                break
+
+    if page.get_by_text(_QUALTRICS_SURVEY_RE).count():
+        dialog = page.locator('[class*="QSIWebResponsive"], [role="dialog"]').filter(
+            has_text=_QUALTRICS_SURVEY_RE,
+        )
+        if dialog.count():
+            for sel in (
+                dialog.locator('button[aria-label*="close" i]'),
+                dialog.locator("button").filter(has_text=re.compile(r"^×$|^close$", re.I)),
+            ):
+                if _try_click_visible(page, sel):
+                    closed = True
+                    break
+
+    for frame in page.frames:
+        try:
+            frame_url = frame.url or ""
+        except Exception:
+            continue
+        if "qualtrics" not in frame_url.lower():
+            continue
+        for sel in (
+            'button[aria-label*="Close" i]',
+            "button.close",
+            '[class*="close"]',
+        ):
+            try:
+                loc = frame.locator(sel)
+                if _try_click_visible(page, loc):
+                    closed = True
+            except Exception:
+                pass
+
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+
+    if closed:
+        print("Dismissed CA ANZ feedback survey overlay.", flush=True)
+    return closed
+
+
+def _prepare_ca_anz_page(page: Page) -> None:
+    """Clear blocking overlays before clicks or manual gate."""
+    _dismiss_ca_anz_overlays(page)
+    raise_if_rate_limited(page)
 
 
 def _postcode_input_locator(page: Page):
@@ -169,6 +257,7 @@ def _fill_postcode_field(page: Page, postcode: str) -> None:
 def _capture_via_results_url(page: Page, url: str) -> tuple[dict[str, Any], dict[str, Any]]:
     with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
         page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+    _prepare_ca_anz_page(page)
     return _parse_getmembers_response(info.value)
 
 
@@ -190,7 +279,7 @@ def _capture_postcode_via_landing_reset(
     )
     page.goto(FIND_CA_LANDING_URL, wait_until="domcontentloaded", timeout=120_000)
     interruptible_page_wait_ms(page, 1_500)
-    raise_if_rate_limited(page)
+    _prepare_ca_anz_page(page)
     return _capture_via_results_url(page, url)
 
 
@@ -237,17 +326,19 @@ def _capture_first_getmembers(
     if manual_gate:
         page.goto(url, wait_until="domcontentloaded", timeout=120_000)
         interruptible_page_wait_ms(page, 1_500)
-        raise_if_rate_limited(page)
+        _prepare_ca_anz_page(page)
         print(
-            "Manual gate: use the browser if needed, then Resume ▶ in the Playwright Inspector. "
+            "Manual gate: use the browser if needed (close any survey if it reappears), "
+            "then Resume ▶ in the Playwright Inspector. "
             "The page will reload to capture GetMembers.",
             flush=True,
         )
         page.pause()
         interruptible_page_wait_ms(page, 500)
-        raise_if_rate_limited(page)
+        _prepare_ca_anz_page(page)
         with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
             page.reload(wait_until="domcontentloaded", timeout=120_000)
+        _prepare_ca_anz_page(page)
         return _parse_getmembers_response(info.value)
 
     if _on_ca_anz_find_ca_page(page):
@@ -277,6 +368,7 @@ def _fetch_next_batch_via_load_more(
     """Click **Load more**, return (response_json, request_body_dict) from the GetMembers XHR."""
     page.set_default_timeout(int(timeout_ms))
     try:
+        _prepare_ca_anz_page(page)
         with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
             btn = page.get_by_role("button", name=re.compile(r"load\s*more", re.I))
             btn.first.scroll_into_view_if_needed()
@@ -421,6 +513,7 @@ def run_ca_anz(
             break
         if load_more_round > 0:
             sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
+        _prepare_ca_anz_page(page)
         try:
             data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=120_000)
         except Exception as exc:

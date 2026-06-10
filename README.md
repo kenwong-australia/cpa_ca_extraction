@@ -57,7 +57,7 @@ OUT="data/ca_anz_$(date +%Y%m%d_%H%M).csv"
 ./run_scraper.sh run --site ca_anz --headed --out "$OUT" --location 3000 --seed "Melbourne,VIC,3000" --limit 40
 ```
 
-Optional **`--manual-gate`**: Playwright **Inspector** pause once at the start (with `--input`, only on the **first seed** of that run — the resumed index after a checkpoint). After **Resume**, the page **reloads** to capture `GetMembers`. Useful when the site is picky about session/`token`.
+Optional **`--manual-gate`**: Playwright **Inspector** pause once at the start (with `--input`, only on the **first seed** of that run — the resumed index after a checkpoint). After **Resume**, the page **reloads** to capture `GetMembers`. Useful when the site is picky about session/`token`. If a **Qualtrics satisfaction survey** pops up, the scraper tries to close it automatically before **Load more**; you can also click **×** during the manual gate pause.
 
 ```bash
 ./run_scraper.sh run --site ca_anz --headed --out "$OUT" --input data/seeds_ca_anz_cbd.csv --manual-gate
