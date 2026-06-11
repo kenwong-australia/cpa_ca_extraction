@@ -188,54 +188,56 @@ _QUALTRICS_SURVEY_RE = re.compile(
 )
 
 
-def _try_click_visible(page: Page, locator, *, timeout_ms: float = 2_000) -> bool:
+def _try_click_visible(page: Page, locator, *, timeout_ms: float = 2_000, force: bool = False) -> bool:
     try:
         if locator.count() == 0:
             return False
         target = locator.first
-        if not target.is_visible(timeout=500):
+        if not force and not target.is_visible(timeout=500):
             return False
-        target.click(timeout=timeout_ms)
+        target.click(timeout=timeout_ms, force=force)
         interruptible_page_wait_ms(page, 300)
         return True
     except Exception:
         return False
 
 
-def _dismiss_ca_anz_overlays(page: Page) -> bool:
-    """
-    Close Qualtrics satisfaction surveys and similar modals that block Search / Load more.
-
-    CA ANZ sometimes shows: "How satisfied are you with your experience…" (Qualtrics).
-    """
+def _dismiss_ca_anz_overlays_once(page: Page) -> bool:
     closed = False
 
-    qualtrics = page.locator('[class*="QSIWebResponsive"]')
-    if qualtrics.count():
-        for sel in (
-            '[class*="QSIWebResponsive"] [role="button"][aria-label*="close" i]',
-            '[class*="QSIWebResponsive"] button[aria-label*="close" i]',
-            '[class*="QSIWebResponsive"] [class*="close-button"]',
-            '[class*="QSIWebResponsive"] [class*="CloseButton"]',
-            '[class*="QSIWebResponsive"] button:has-text("×")',
-            '[class*="QSIWebResponsive"] button:has-text("Close")',
-        ):
-            if _try_click_visible(page, page.locator(sel)):
-                closed = True
-                break
+    for sel in (
+        '[class*="QSIWebResponsive"] [role="button"][aria-label*="close" i]',
+        '[class*="QSIWebResponsive"] button[aria-label*="close" i]',
+        '[class*="QSIWebResponsive"] [class*="close-button"]',
+        '[class*="QSIWebResponsive"] [class*="CloseButton"]',
+        '[class*="QSIWebResponsive"] [class*="close-btn"]',
+        ".QSIWebResponsiveDialog-close-btn",
+        '[class*="QSIWebResponsive"] button:has-text("×")',
+        '[class*="QSIWebResponsive"] button:has-text("✕")',
+        '[class*="QSIWebResponsive"] button:has-text("Close")',
+    ):
+        if _try_click_visible(page, page.locator(sel)):
+            closed = True
+            break
 
-    if page.get_by_text(_QUALTRICS_SURVEY_RE).count():
+    if not closed and page.get_by_text(_QUALTRICS_SURVEY_RE).count():
         dialog = page.locator('[class*="QSIWebResponsive"], [role="dialog"]').filter(
             has_text=_QUALTRICS_SURVEY_RE,
         )
         if dialog.count():
-            for sel in (
-                dialog.locator('button[aria-label*="close" i]'),
-                dialog.locator("button").filter(has_text=re.compile(r"^×$|^close$", re.I)),
-            ):
-                if _try_click_visible(page, sel):
-                    closed = True
-                    break
+            header_btns = dialog.locator("button")
+            if header_btns.count() and _try_click_visible(page, header_btns.last, force=True):
+                closed = True
+            else:
+                for sel in (
+                    dialog.locator('button[aria-label*="close" i]'),
+                    dialog.locator("button").filter(
+                        has_text=re.compile(r"^×$|^✕$|^close$", re.I),
+                    ),
+                ):
+                    if _try_click_visible(page, sel, force=True):
+                        closed = True
+                        break
 
     for frame in page.frames:
         try:
@@ -251,7 +253,7 @@ def _dismiss_ca_anz_overlays(page: Page) -> bool:
         ):
             try:
                 loc = frame.locator(sel)
-                if _try_click_visible(page, loc):
+                if _try_click_visible(page, loc, force=True):
                     closed = True
             except Exception:
                 pass
@@ -261,14 +263,28 @@ def _dismiss_ca_anz_overlays(page: Page) -> bool:
     except Exception:
         pass
 
-    if closed:
-        print("Dismissed CA ANZ feedback survey overlay.", flush=True)
     return closed
+
+
+def _dismiss_ca_anz_overlays(page: Page, *, tries: int = 2) -> bool:
+    """
+    Close Qualtrics satisfaction surveys and similar modals that block Search / Load more.
+
+    CA ANZ sometimes shows: "How satisfied are you with your experience…" (Qualtrics).
+    """
+    closed_any = False
+    for _ in range(max(1, tries)):
+        if _dismiss_ca_anz_overlays_once(page):
+            closed_any = True
+        interruptible_page_wait_ms(page, 400)
+    if closed_any:
+        print("Dismissed CA ANZ feedback survey overlay.", flush=True)
+    return closed_any
 
 
 def _prepare_ca_anz_page(page: Page) -> None:
     """Clear blocking overlays before clicks or manual gate."""
-    _dismiss_ca_anz_overlays(page)
+    _dismiss_ca_anz_overlays(page, tries=3)
     raise_if_rate_limited(page)
 
 
@@ -395,7 +411,8 @@ def _capture_first_getmembers(
         print(
             "Manual gate: dismiss any survey, wait until results show "
             "('Showing … out of … results for …'), then Resume ▶ in Playwright Inspector. "
-            "The page will reload to capture GetMembers.",
+            "The page will reload to capture GetMembers. "
+            "During Load more later, avoid clicking the survey yourself — the scraper closes it.",
             flush=True,
         )
         page.pause()
@@ -441,21 +458,29 @@ def _capture_first_getmembers(
     return _capture_via_results_url(page, url)
 
 
-def _find_load_more_button(page: Page, *, wait_ms: float = 10_000):
-    btn = page.get_by_role("button", name=_LOAD_MORE_BTN_RE)
-    if btn.count() == 0:
-        return None
-    try:
-        btn.first.wait_for(state="visible", timeout=wait_ms)
-        return btn.first
-    except Exception:
-        return None
+def _find_load_more_button(page: Page, *, wait_ms: float = 15_000):
+    """Wait for Load more, dismissing Qualtrics if it appears."""
+    deadline_ms = wait_ms
+    step_ms = 500
+    elapsed = 0
+    while elapsed < deadline_ms:
+        _dismiss_ca_anz_overlays(page, tries=1)
+        btn = page.get_by_role("button", name=_LOAD_MORE_BTN_RE)
+        if btn.count():
+            try:
+                btn.first.wait_for(state="visible", timeout=min(2_000, deadline_ms - elapsed))
+                return btn.first
+            except Exception:
+                pass
+        interruptible_page_wait_ms(page, step_ms)
+        elapsed += step_ms
+    return None
 
 
 def _fetch_next_batch_via_load_more(
     page: Page,
     *,
-    timeout_ms: float = 180_000,
+    timeout_ms: float = 120_000,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Click **Load more**, return (response_json, request_body_dict) from the GetMembers XHR."""
     _prepare_ca_anz_page(page)
@@ -463,7 +488,7 @@ def _fetch_next_batch_via_load_more(
     if target is None:
         raise RuntimeError(
             "Load more button not visible (Qualtrics survey, spinner, or end of list). "
-            "Dismiss overlays in the browser and re-run."
+            "If a survey appears during scraping, let the scraper close it — or re-run after Ctrl+C."
         )
     with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
         target.scroll_into_view_if_needed(timeout=10_000)
@@ -632,16 +657,16 @@ def run_ca_anz(
         data: dict[str, Any] | None = None
         refreshed: dict[str, Any] | None = None
         last_exc: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(3):
             try:
-                data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=180_000)
+                data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=120_000)
                 last_exc = None
                 break
             except Exception as exc:
                 last_exc = exc
-                if attempt == 0:
+                if attempt < 2:
                     print(
-                        f"Load more attempt {attempt + 1} failed ({exc}); retrying once…",
+                        f"Load more attempt {attempt + 1} failed ({exc}); retrying…",
                         flush=True,
                     )
                     _prepare_ca_anz_page(page)
