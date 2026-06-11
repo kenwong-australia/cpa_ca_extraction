@@ -455,13 +455,25 @@ def _capture_first_getmembers(
     """
     if manual_gate:
         page.goto(url, wait_until="domcontentloaded", timeout=120_000)
-        interruptible_page_wait_ms(page, 1_500)
+        interruptible_page_wait_ms(page, 3_000)
         _prepare_ca_anz_page(page)
+        try:
+            page.get_by_text(re.compile(r"Showing\s+\d+\s+out\s+of\s+\d+", re.I)).wait_for(
+                state="visible",
+                timeout=45_000,
+            )
+            print("Manual gate: results list is visible in the browser.", flush=True)
+        except Exception:
+            print(
+                "Manual gate: results list not visible yet (form-only or still loading) — "
+                "that is OK.",
+                flush=True,
+            )
         print(
-            "Manual gate: dismiss any survey, wait until results show "
-            "('Showing … out of … results for …'), then Resume ▶ in Playwright Inspector. "
-            "The page will reload to capture GetMembers. "
-            "During Load more later, avoid clicking the survey yourself — the scraper closes it.",
+            "Manual gate: when the blue spinner is gone (or after ~30s), click Resume ▶ in "
+            "Playwright Inspector. Do NOT click the red Search button. "
+            "After Resume the scraper reloads this page and captures GetMembers — "
+            "results often appear only after that reload.",
             flush=True,
         )
         page.pause()
