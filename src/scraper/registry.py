@@ -40,3 +40,11 @@ SITE_REGISTRY: dict[str, SiteRunner] = {
 
 # Sites whose --input CSV uses load_postcode_seed_placements (postcode typed as search_query).
 POSTCODE_SEED_SITES: frozenset[str] = frozenset({"ca_anz"})
+
+# Global CLI defaults (cpa_au and explicit overrides).
+CLI_DEFAULT_JITTER_MIN_S = 5.0
+CLI_DEFAULT_JITTER_MAX_S = 15.0
+
+# CA ANZ Load more / GetMembers is fragile — slower default pacing than cpa_au.
+CA_ANZ_DEFAULT_JITTER_MIN_S = 10.0
+CA_ANZ_DEFAULT_JITTER_MAX_S = 25.0

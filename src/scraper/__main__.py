@@ -37,7 +37,14 @@ from scraper.core.delays import sleep_random
 from scraper.core.rate_limit import RateLimitedError
 from scraper.core.safety import SafetyBrakes
 from scraper.core.seeds import load_postcode_seed_placements, load_seed_placements
-from scraper.registry import POSTCODE_SEED_SITES, SITE_REGISTRY
+from scraper.registry import (
+    CA_ANZ_DEFAULT_JITTER_MAX_S,
+    CA_ANZ_DEFAULT_JITTER_MIN_S,
+    CLI_DEFAULT_JITTER_MAX_S,
+    CLI_DEFAULT_JITTER_MIN_S,
+    POSTCODE_SEED_SITES,
+    SITE_REGISTRY,
+)
 
 _SIGINT_PREV_TIME: float | None = None
 
@@ -175,6 +182,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"--out must be a CSV file path, not a directory: {out}", file=sys.stderr)
         return 2
     runner = SITE_REGISTRY[site]
+
+    if (
+        site == "ca_anz"
+        and args.jitter_min_seconds == CLI_DEFAULT_JITTER_MIN_S
+        and args.jitter_max_seconds == CLI_DEFAULT_JITTER_MAX_S
+    ):
+        args.jitter_min_seconds = CA_ANZ_DEFAULT_JITTER_MIN_S
+        args.jitter_max_seconds = CA_ANZ_DEFAULT_JITTER_MAX_S
+        print(
+            f"CA ANZ jitter: {args.jitter_min_seconds:g}–{args.jitter_max_seconds:g}s "
+            f"between Load more clicks (override with --jitter-min-seconds / --jitter-max-seconds).",
+            flush=True,
+        )
 
     if site == "ca_anz" and not args.headed:
         print(

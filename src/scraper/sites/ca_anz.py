@@ -479,8 +479,8 @@ def run_ca_anz(
     manual_gate: bool = False,
     brakes: SafetyBrakes | None = None,
     dedupe_seen: set[str] | None = None,
-    jitter_min_s: float = 5.0,
-    jitter_max_s: float = 15.0,
+    jitter_min_s: float = 10.0,
+    jitter_max_s: float = 25.0,
 ) -> list[ContactRecord]:
     brakes = brakes or SafetyBrakes()
     postcode = (location_query or "").strip()
@@ -661,8 +661,8 @@ def run_ca_anz_cli(
     wall_clock_seconds: float | None = None,
     dedupe_seen: set[str] | None = None,
     brakes: SafetyBrakes | None = None,
-    jitter_min_s: float = 5.0,
-    jitter_max_s: float = 15.0,
+    jitter_min_s: float = 10.0,
+    jitter_max_s: float = 25.0,
     manual_gate: bool = False,
 ) -> list[ContactRecord]:
     brakes = brakes or SafetyBrakes(
