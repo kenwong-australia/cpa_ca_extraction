@@ -134,27 +134,11 @@ def _parse_getmembers_response(resp: Response) -> tuple[dict[str, Any], dict[str
     return first_data, template
 
 
-def _attach_getmembers_logger(page: Page, seen: list[tuple[int, str]]) -> Callable[[Response], None]:
-    def _on(resp: Response) -> None:
-        try:
-            if resp.request.method != "POST" or "GetMembers" not in resp.url:
-                return
-            seen.append((resp.status, resp.url))
-            if resp.status != 200:
-                snippet = ""
-                try:
-                    snippet = resp.text()[:120].replace("\n", " ")
-                except Exception:
-                    pass
-                msg = f"GetMembers HTTP {resp.status} (need 200)"
-                if snippet:
-                    msg += f": {snippet!r}"
-                print(msg, flush=True)
-        except Exception:
-            pass
-
-    page.on("response", _on)
-    return _on
+def _is_getmembers_post(resp: Response) -> bool:
+    try:
+        return resp.request.method == "POST" and "GetMembers" in resp.url
+    except Exception:
+        return False
 
 
 def _wait_for_getmembers(
@@ -164,35 +148,34 @@ def _wait_for_getmembers(
     timeout_ms: float = 120_000,
     label: str = "navigation",
 ) -> Response:
-    seen: list[tuple[int, str]] = []
-    listener = _attach_getmembers_logger(page, seen)
+    """Wait for any GetMembers POST, then require HTTP 200 (fail fast on 500, not 120s wait)."""
     try:
-        with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
+        with page.expect_response(_is_getmembers_post, timeout=timeout_ms) as info:
             trigger()
-        return info.value
+        resp = info.value
     except Exception as exc:
-        if seen:
-            codes = ", ".join(f"HTTP {s}" for s, _ in seen)
-            raise RuntimeError(
-                f"GetMembers after {label} returned {codes} (need HTTP 200). "
-                "Close any survey, wait for the results list to finish loading, then re-run."
-            ) from exc
         title = ""
         try:
             title = page.title()
         except Exception:
             pass
         raise RuntimeError(
-            f"No GetMembers HTTP 200 within {int(timeout_ms / 1000)}s after {label}. "
+            f"No GetMembers response within {int(timeout_ms / 1000)}s after {label}. "
             f"Page title: {title!r}. "
-            "Common causes: Qualtrics survey still open, reCAPTCHA not passed, infinite spinner, "
-            "or rate-limit. Confirm you see 'Showing … results for …' before Resume, then re-run."
+            "Site may be rate-limiting Playwright — wait 15–30 min if normal Chrome works."
         ) from exc
-    finally:
+
+    if resp.status != 200:
+        snippet = ""
         try:
-            page.remove_listener("response", listener)
+            snippet = resp.text()[:120].replace("\n", " ")
         except Exception:
             pass
+        msg = f"GetMembers after {label} returned HTTP {resp.status} (need 200)"
+        if snippet:
+            msg += f": {snippet!r}"
+        raise RuntimeError(msg)
+    return resp
 
 
 def _on_ca_anz_find_ca_page(page: Page) -> bool:
