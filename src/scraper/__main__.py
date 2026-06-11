@@ -210,6 +210,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     rows: list = []
+    dedupe_seen = read_existing_dedupe_keys(out)
 
     phase3_pre: _Phase3PreBrowser | None = None
     if input_path is not None:
@@ -222,7 +223,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if not placements:
             print("No seed rows to process (check seed CSV columns).", file=sys.stderr)
             return 2
-        seen = read_existing_dedupe_keys(out)
+        seen = dedupe_seen
         shared = SafetyBrakes(
             max_consecutive_failures=args.max_consecutive_failures,
             max_retries_per_location=args.max_search_retries,
@@ -379,6 +380,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         jitter_min_s=args.jitter_min_seconds,
                         jitter_max_s=args.jitter_max_seconds,
                         manual_gate=args.manual_gate and site == "ca_anz",
+                        dedupe_seen=dedupe_seen,
                     ),
                 )
         except RateLimitedError as exc:
