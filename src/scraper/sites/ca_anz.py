@@ -24,52 +24,29 @@ _PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS = 60_000
 
 FIND_CA_LANDING_URL = "https://www.charteredaccountantsanz.com/find-a-ca"
 
-# Hide Qualtrics markup if a script still injects it — hide only (do not remove nodes;
-# removing broke satelliteLib appendChild and MutationObserver on the CA ANZ SPA).
-_HIDE_QSI_INIT_SCRIPT = """
-(() => {
-  const hide = () => {
-    const root = document.documentElement;
-    if (!root) return;
-    document.querySelectorAll('[class*="QSIWebResponsive"]').forEach((el) => {
-      el.style.setProperty('display', 'none', 'important');
-      el.style.setProperty('visibility', 'hidden', 'important');
-      el.style.setProperty('pointer-events', 'none', 'important');
-    });
-  };
-  const boot = () => {
-    hide();
-    window.setInterval(hide, 750);
-  };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
-  } else {
-    boot();
-  }
-})();
-"""
 
-_QUALTRICS_ROUTE_PATTERNS = (
-    "**/*qualtrics*",
-    "**/*siteintercept*",
-)
+def _qualtrics_request_url(url: str) -> bool:
+    """True only for Qualtrics survey hosts — avoid broad patterns that confuse the SPA."""
+    u = (url or "").lower()
+    return "qualtrics.com" in u
 
 
 def install_ca_anz_session_hardening(context: BrowserContext, page: Page) -> None:
     """
     Block Qualtrics satisfaction surveys that cover Load more and stall GetMembers.
 
-    Surveys are intermittent; blocking is more reliable than clicking × during automation.
+    Network-only (no DOM scripts) — injecting JS was breaking the CA ANZ Vue app.
     """
 
-    def _block(_route) -> None:
-        _route.abort()
+    def _route(route) -> None:
+        if _qualtrics_request_url(route.request.url):
+            route.abort()
+        else:
+            route.continue_()
 
-    for pattern in _QUALTRICS_ROUTE_PATTERNS:
-        context.route(pattern, _block)
-    context.add_init_script(_HIDE_QSI_INIT_SCRIPT)
+    context.route("**/*", _route)
     print(
-        "CA ANZ: Qualtrics survey intercept blocked (network + CSS hide; no DOM removal).",
+        "CA ANZ: Qualtrics requests blocked (qualtrics.com only; site traffic unchanged).",
         flush=True,
     )
 
@@ -381,14 +358,42 @@ def _fill_postcode_field(page: Page, postcode: str) -> None:
     inp.fill((postcode or "").strip())
 
 
-def _capture_via_results_url(page: Page, url: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    resp = _wait_for_getmembers(
-        page,
-        lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
-        label="results URL goto",
-    )
-    _prepare_ca_anz_page(page)
-    return _parse_getmembers_response(resp)
+def _is_retriable_getmembers_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "500" in msg or "no getmembers" in msg or "timeout" in msg
+
+
+def _capture_via_results_url(
+    page: Page,
+    url: str,
+    *,
+    attempts: int = 3,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        if attempt > 0:
+            wait_s = 20 * attempt
+            print(
+                f"GetMembers not ready (attempt {attempt}/{attempts}); "
+                f"waiting {wait_s}s, then retrying results URL…",
+                flush=True,
+            )
+            interruptible_page_wait_ms(page, wait_s * 1_000)
+            _prepare_ca_anz_page(page)
+        try:
+            resp = _wait_for_getmembers(
+                page,
+                lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
+                label=f"results URL goto (attempt {attempt + 1}/{attempts})",
+            )
+            _prepare_ca_anz_page(page)
+            return _parse_getmembers_response(resp)
+        except RuntimeError as exc:
+            last_exc = exc
+            if attempt >= attempts - 1 or not _is_retriable_getmembers_error(exc):
+                break
+    assert last_exc is not None
+    raise last_exc
 
 
 def _capture_postcode_via_landing_reset(
@@ -454,50 +459,50 @@ def _capture_first_getmembers(
     URL-only goto often does not fire GetMembers for the new postcode.
     """
     if manual_gate:
-        page.goto(url, wait_until="domcontentloaded", timeout=120_000)
-        interruptible_page_wait_ms(page, 3_000)
-        _prepare_ca_anz_page(page)
+        print("Manual gate: loading results page and waiting for GetMembers…", flush=True)
         try:
-            page.get_by_text(re.compile(r"Showing\s+\d+\s+out\s+of\s+\d+", re.I)).wait_for(
-                state="visible",
-                timeout=45_000,
-            )
-            print("Manual gate: results list is visible in the browser.", flush=True)
-        except Exception:
-            print(
-                "Manual gate: results list not visible yet (form-only or still loading) — "
-                "that is OK.",
-                flush=True,
-            )
-        print(
-            "Manual gate: when the blue spinner is gone (or after ~30s), click Resume ▶ in "
-            "Playwright Inspector. Do NOT click the red Search button. "
-            "After Resume the scraper reloads this page and captures GetMembers — "
-            "results often appear only after that reload.",
-            flush=True,
-        )
-        page.pause()
-        interruptible_page_wait_ms(page, 500)
-        _prepare_ca_anz_page(page)
-        try:
-            resp = _wait_for_getmembers(
-                page,
-                lambda: page.reload(wait_until="domcontentloaded", timeout=120_000),
-                label="manual-gate reload",
-            )
-        except RuntimeError as reload_exc:
-            print(
-                f"Manual gate reload did not capture GetMembers ({reload_exc}); "
-                "trying fresh results URL…",
-                flush=True,
-            )
-            _prepare_ca_anz_page(page)
             resp = _wait_for_getmembers(
                 page,
                 lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
-                label="manual-gate fresh goto",
+                label="manual-gate load",
             )
-        _prepare_ca_anz_page(page)
+        except RuntimeError as first_exc:
+            print(
+                f"Manual gate: first load did not capture GetMembers ({first_exc}).\n"
+                "If the browser says 'Searching…' or shows a blank/spinner state, that is "
+                "normal while paused. Dismiss any survey (×). Do NOT click Search.\n"
+                "Click Resume ▶ in Playwright Inspector — the scraper will reload once.",
+                flush=True,
+            )
+            page.pause()
+            interruptible_page_wait_ms(page, 500)
+            _prepare_ca_anz_page(page)
+            try:
+                resp = _wait_for_getmembers(
+                    page,
+                    lambda: page.reload(wait_until="domcontentloaded", timeout=120_000),
+                    label="manual-gate reload",
+                )
+            except RuntimeError as reload_exc:
+                print(
+                    f"Manual gate reload failed ({reload_exc}); trying fresh results URL…",
+                    flush=True,
+                )
+                _prepare_ca_anz_page(page)
+                resp = _wait_for_getmembers(
+                    page,
+                    lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
+                    label="manual-gate fresh goto",
+                )
+        else:
+            print(
+                "Manual gate: results API OK. Glance at the browser if you want, then click "
+                "Resume ▶ in Playwright Inspector to start Load more. Do NOT click Search.",
+                flush=True,
+            )
+            page.pause()
+            interruptible_page_wait_ms(page, 500)
+            _prepare_ca_anz_page(page)
         return _parse_getmembers_response(resp)
 
     if _on_ca_anz_find_ca_page(page):
@@ -600,9 +605,18 @@ def run_ca_anz(
             manual_gate=manual_gate,
         )
     except Exception as e:
+        hint = ""
+        err = str(e).lower()
+        if "500" in err:
+            hint = (
+                " The API returned HTTP 500 — the site often throttles Playwright even when "
+                "normal Chrome works. Wait 15–30 minutes, confirm the results URL in Chrome, "
+                "then re-run the same command."
+            )
         raise RuntimeError(
             "Did not capture GetMembers — use --headed (required for CA ANZ) and optionally "
-            "--manual-gate for a warm-up pause.",
+            "--manual-gate for a warm-up pause."
+            + hint,
         ) from e
 
     interruptible_page_wait_ms(page, 300)
