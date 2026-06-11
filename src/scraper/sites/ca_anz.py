@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -105,6 +106,67 @@ def _parse_getmembers_response(resp: Response) -> tuple[dict[str, Any], dict[str
     except json.JSONDecodeError as e:
         raise RuntimeError("GetMembers request body was not JSON.") from e
     return first_data, template
+
+
+def _attach_getmembers_logger(page: Page, seen: list[tuple[int, str]]) -> Callable[[Response], None]:
+    def _on(resp: Response) -> None:
+        try:
+            if resp.request.method != "POST" or "GetMembers" not in resp.url:
+                return
+            seen.append((resp.status, resp.url))
+            if resp.status != 200:
+                snippet = ""
+                try:
+                    snippet = resp.text()[:120].replace("\n", " ")
+                except Exception:
+                    pass
+                msg = f"GetMembers HTTP {resp.status} (need 200)"
+                if snippet:
+                    msg += f": {snippet!r}"
+                print(msg, flush=True)
+        except Exception:
+            pass
+
+    page.on("response", _on)
+    return _on
+
+
+def _wait_for_getmembers(
+    page: Page,
+    trigger: Callable[[], None],
+    *,
+    timeout_ms: float = 120_000,
+    label: str = "navigation",
+) -> Response:
+    seen: list[tuple[int, str]] = []
+    listener = _attach_getmembers_logger(page, seen)
+    try:
+        with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
+            trigger()
+        return info.value
+    except Exception as exc:
+        if seen:
+            codes = ", ".join(f"HTTP {s}" for s, _ in seen)
+            raise RuntimeError(
+                f"GetMembers after {label} returned {codes} (need HTTP 200). "
+                "Close any survey, wait for the results list to finish loading, then re-run."
+            ) from exc
+        title = ""
+        try:
+            title = page.title()
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"No GetMembers HTTP 200 within {int(timeout_ms / 1000)}s after {label}. "
+            f"Page title: {title!r}. "
+            "Common causes: Qualtrics survey still open, reCAPTCHA not passed, infinite spinner, "
+            "or rate-limit. Confirm you see 'Showing … results for …' before Resume, then re-run."
+        ) from exc
+    finally:
+        try:
+            page.remove_listener("response", listener)
+        except Exception:
+            pass
 
 
 def _on_ca_anz_find_ca_page(page: Page) -> bool:
@@ -255,10 +317,13 @@ def _fill_postcode_field(page: Page, postcode: str) -> None:
 
 
 def _capture_via_results_url(page: Page, url: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
-        page.goto(url, wait_until="domcontentloaded", timeout=120_000)
+    resp = _wait_for_getmembers(
+        page,
+        lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
+        label="results URL goto",
+    )
     _prepare_ca_anz_page(page)
-    return _parse_getmembers_response(info.value)
+    return _parse_getmembers_response(resp)
 
 
 def _capture_postcode_via_landing_reset(
@@ -328,18 +393,34 @@ def _capture_first_getmembers(
         interruptible_page_wait_ms(page, 1_500)
         _prepare_ca_anz_page(page)
         print(
-            "Manual gate: use the browser if needed (close any survey if it reappears), "
-            "then Resume ▶ in the Playwright Inspector. "
+            "Manual gate: dismiss any survey, wait until results show "
+            "('Showing … out of … results for …'), then Resume ▶ in Playwright Inspector. "
             "The page will reload to capture GetMembers.",
             flush=True,
         )
         page.pause()
         interruptible_page_wait_ms(page, 500)
         _prepare_ca_anz_page(page)
-        with page.expect_response(_getmembers_response_ok, timeout=120_000) as info:
-            page.reload(wait_until="domcontentloaded", timeout=120_000)
+        try:
+            resp = _wait_for_getmembers(
+                page,
+                lambda: page.reload(wait_until="domcontentloaded", timeout=120_000),
+                label="manual-gate reload",
+            )
+        except RuntimeError as reload_exc:
+            print(
+                f"Manual gate reload did not capture GetMembers ({reload_exc}); "
+                "trying fresh results URL…",
+                flush=True,
+            )
+            _prepare_ca_anz_page(page)
+            resp = _wait_for_getmembers(
+                page,
+                lambda: page.goto(url, wait_until="domcontentloaded", timeout=120_000),
+                label="manual-gate fresh goto",
+            )
         _prepare_ca_anz_page(page)
-        return _parse_getmembers_response(info.value)
+        return _parse_getmembers_response(resp)
 
     if _on_ca_anz_find_ca_page(page):
         try:
