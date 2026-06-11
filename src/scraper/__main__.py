@@ -37,6 +37,7 @@ from scraper.core.delays import sleep_random
 from scraper.core.rate_limit import RateLimitedError
 from scraper.core.safety import SafetyBrakes
 from scraper.core.seeds import load_postcode_seed_placements, load_seed_placements
+from scraper.sites.ca_anz import install_ca_anz_session_hardening
 from scraper.registry import (
     CA_ANZ_DEFAULT_JITTER_MAX_S,
     CA_ANZ_DEFAULT_JITTER_MIN_S,
@@ -105,6 +106,7 @@ def _run_with_one_shot_rate_limit_recovery(
     context: BrowserContext,
     page: Page,
     work: Callable[[Page], _T],
+    site: str = "",
 ) -> tuple[_T, Browser, BrowserContext, Page]:
     """
     On RateLimitedError: if wait_minutes > 0, close browser, sleep, launch a fresh browser,
@@ -134,6 +136,8 @@ def _run_with_one_shot_rate_limit_recovery(
             browser.close()
             time.sleep(float(wait_minutes) * 60.0)
             browser, context, page = new_browser_context(p, headless=headless)
+            if site == "ca_anz":
+                install_ca_anz_session_hardening(context, page)
 
 
 # Phase 3 bundle built before Playwright so checkpoint prompts do not sit behind a silent headless window.
@@ -295,6 +299,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             flush=True,
         )
         browser, _ctx, page = new_browser_context(p, headless=not args.headed)
+        if site == "ca_anz":
+            install_ca_anz_session_hardening(_ctx, page)
         try:
             if phase3_pre is not None:
                 placements, seen, shared, total_seeds, cp_path, start_index = phase3_pre
@@ -336,6 +342,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                                     and site == "ca_anz"
                                     and i == st,
                                 ),
+                                site=site,
                             )
                         except RateLimitedError:
                             raise
@@ -402,6 +409,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
                         manual_gate=args.manual_gate and site == "ca_anz",
                         dedupe_seen=dedupe_seen,
                     ),
+                    site=site,
                 )
         except RateLimitedError as exc:
             print(f"\n{exc}", file=sys.stderr, flush=True)

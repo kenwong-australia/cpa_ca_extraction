@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from playwright.sync_api import Page, Response
+from playwright.sync_api import BrowserContext, Page, Response
 
 from scraper.core.csv_sink import append_contact_row
 from scraper.core.dedupe import dedupe_key_normalised
@@ -23,6 +23,44 @@ from scraper.core.safety import SafetyBrakes
 _PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS = 60_000
 
 FIND_CA_LANDING_URL = "https://www.charteredaccountantsanz.com/find-a-ca"
+
+# Strip Qualtrics site-intercept if a script still injects markup on-page.
+_HIDE_QSI_INIT_SCRIPT = """
+(() => {
+  const removeQsi = () => {
+    document.querySelectorAll('[class*="QSIWebResponsive"]').forEach((n) => n.remove());
+  };
+  removeQsi();
+  new MutationObserver(removeQsi).observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+})();
+"""
+
+_QUALTRICS_ROUTE_PATTERNS = (
+    "**/*qualtrics*",
+    "**/*siteintercept*",
+)
+
+
+def install_ca_anz_session_hardening(context: BrowserContext, page: Page) -> None:
+    """
+    Block Qualtrics satisfaction surveys that cover Load more and stall GetMembers.
+
+    Surveys are intermittent; blocking is more reliable than clicking × during automation.
+    """
+
+    def _block(_route) -> None:
+        _route.abort()
+
+    for pattern in _QUALTRICS_ROUTE_PATTERNS:
+        context.route(pattern, _block)
+    context.add_init_script(_HIDE_QSI_INIT_SCRIPT)
+    print(
+        "CA ANZ: Qualtrics survey intercept blocked (network + on-page overlay strip).",
+        flush=True,
+    )
 
 _NAME_WITH_DISPLAY_RE = re.compile(
     r"^(.+?)\s+(.+?)\s+\(([^)]*)\)\s*$",
