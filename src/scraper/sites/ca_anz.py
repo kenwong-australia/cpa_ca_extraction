@@ -521,9 +521,10 @@ def run_ca_anz(
     total_count = int(first_data.get("totalCount") or 0)
     records_out: list[ContactRecord] = []
     written = 0
+    skipped_dupes = 0
 
     def process_batch(batch: list[dict[str, Any]]) -> None:
-        nonlocal written
+        nonlocal written, skipped_dupes
         for row in batch:
             brakes.check_wall_clock()
             if limit is not None and written >= limit:
@@ -564,6 +565,7 @@ def run_ca_anz(
             )
             ident = (rec.dedupe_key or rec.dedupe_key_normalised or "").strip()
             if dedupe_seen is not None and ident and ident in dedupe_seen:
+                skipped_dupes += 1
                 continue
             append_contact_row(out_csv, rec)
             if dedupe_seen is not None and ident:
@@ -595,19 +597,54 @@ def run_ca_anz(
         if load_more_round > 0:
             sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
         _prepare_ca_anz_page(page)
-        try:
-            data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=120_000)
-        except Exception as exc:
-            print(f"Load more failed or timed out: {exc}", flush=True)
+        data: dict[str, Any] | None = None
+        refreshed: dict[str, Any] | None = None
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                data, refreshed = _fetch_next_batch_via_load_more(page, timeout_ms=180_000)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    print(
+                        f"Load more attempt {attempt + 1} failed ({exc}); retrying once…",
+                        flush=True,
+                    )
+                    _prepare_ca_anz_page(page)
+                    sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
+        if last_exc is not None:
+            print(f"Load more failed or timed out: {last_exc}", flush=True)
             break
+        assert data is not None and refreshed is not None
         batch = data.get("searchDetails") or []
         if not batch:
             break
         process_batch(batch)
         rows_delivered += len(batch)
         load_more_round += 1
+        if skipped_dupes and written == 0 and rows_delivered % 100 < 20:
+            print(
+                f"Resume scan: {rows_delivered}/{total_count} on site, "
+                f"{skipped_dupes} already in CSV (no new rows yet — keep re-running until Load more passes your existing block).",
+                flush=True,
+            )
+        elif written:
+            print(
+                f"Progress: {written} new row(s) this run, {rows_delivered}/{total_count} scanned on site.",
+                flush=True,
+            )
         template.update(refreshed)
         template["postcode"] = postcode
+
+    if written == 0 and skipped_dupes:
+        print(
+            f"No new rows written ({skipped_dupes} duplicate(s) skipped). "
+            f"Scanned {rows_delivered}/{total_count} on site before stop. "
+            "Re-run the same command to continue past already-exported contacts.",
+            flush=True,
+        )
 
     return records_out
 
