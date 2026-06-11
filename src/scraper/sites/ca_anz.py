@@ -441,22 +441,34 @@ def _capture_first_getmembers(
     return _capture_via_results_url(page, url)
 
 
+def _find_load_more_button(page: Page, *, wait_ms: float = 10_000):
+    btn = page.get_by_role("button", name=_LOAD_MORE_BTN_RE)
+    if btn.count() == 0:
+        return None
+    try:
+        btn.first.wait_for(state="visible", timeout=wait_ms)
+        return btn.first
+    except Exception:
+        return None
+
+
 def _fetch_next_batch_via_load_more(
     page: Page,
     *,
-    timeout_ms: float = 120_000,
+    timeout_ms: float = 180_000,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Click **Load more**, return (response_json, request_body_dict) from the GetMembers XHR."""
-    page.set_default_timeout(int(timeout_ms))
-    try:
-        _prepare_ca_anz_page(page)
-        with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
-            btn = page.get_by_role("button", name=re.compile(r"load\s*more", re.I))
-            btn.first.scroll_into_view_if_needed()
-            btn.first.click()
-        resp = info.value
-    finally:
-        page.set_default_timeout(_PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS)
+    _prepare_ca_anz_page(page)
+    target = _find_load_more_button(page)
+    if target is None:
+        raise RuntimeError(
+            "Load more button not visible (Qualtrics survey, spinner, or end of list). "
+            "Dismiss overlays in the browser and re-run."
+        )
+    with page.expect_response(_getmembers_response_ok, timeout=timeout_ms) as info:
+        target.scroll_into_view_if_needed(timeout=10_000)
+        target.click(timeout=10_000)
+    resp = info.value
 
     try:
         data = resp.json()
@@ -519,6 +531,26 @@ def run_ca_anz(
         )
 
     total_count = int(first_data.get("totalCount") or 0)
+    if dedupe_seen is not None and out_csv.exists():
+        try:
+            import csv as _csv
+
+            with out_csv.open(encoding="utf-8", newline="") as f:
+                existing_here = sum(
+                    1
+                    for row in _csv.DictReader(f)
+                    if (row.get("search_query") or "").strip() == postcode
+                )
+            if existing_here:
+                pages = (existing_here + 19) // 20
+                print(
+                    f"CSV already has {existing_here} row(s) for postcode {postcode} "
+                    f"(~{pages} pages to skip before new rows can appear).",
+                    flush=True,
+                )
+        except Exception:
+            pass
+
     records_out: list[ContactRecord] = []
     written = 0
     skipped_dupes = 0
@@ -613,6 +645,11 @@ def run_ca_anz(
                         flush=True,
                     )
                     _prepare_ca_anz_page(page)
+                    try:
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    except Exception:
+                        pass
+                    interruptible_page_wait_ms(page, 2_000)
                     sleep_random(min_s=jitter_min_s, max_s=jitter_max_s)
         if last_exc is not None:
             print(f"Load more failed or timed out: {last_exc}", flush=True)
