@@ -24,17 +24,28 @@ _PLAYWRIGHT_PAGE_DEFAULT_TIMEOUT_MS = 60_000
 
 FIND_CA_LANDING_URL = "https://www.charteredaccountantsanz.com/find-a-ca"
 
-# Strip Qualtrics site-intercept if a script still injects markup on-page.
+# Hide Qualtrics markup if a script still injects it — hide only (do not remove nodes;
+# removing broke satelliteLib appendChild and MutationObserver on the CA ANZ SPA).
 _HIDE_QSI_INIT_SCRIPT = """
 (() => {
-  const removeQsi = () => {
-    document.querySelectorAll('[class*="QSIWebResponsive"]').forEach((n) => n.remove());
+  const hide = () => {
+    const root = document.documentElement;
+    if (!root) return;
+    document.querySelectorAll('[class*="QSIWebResponsive"]').forEach((el) => {
+      el.style.setProperty('display', 'none', 'important');
+      el.style.setProperty('visibility', 'hidden', 'important');
+      el.style.setProperty('pointer-events', 'none', 'important');
+    });
   };
-  removeQsi();
-  new MutationObserver(removeQsi).observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
+  const boot = () => {
+    hide();
+    window.setInterval(hide, 750);
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  } else {
+    boot();
+  }
 })();
 """
 
@@ -58,7 +69,7 @@ def install_ca_anz_session_hardening(context: BrowserContext, page: Page) -> Non
         context.route(pattern, _block)
     context.add_init_script(_HIDE_QSI_INIT_SCRIPT)
     print(
-        "CA ANZ: Qualtrics survey intercept blocked (network + on-page overlay strip).",
+        "CA ANZ: Qualtrics survey intercept blocked (network + CSS hide; no DOM removal).",
         flush=True,
     )
 
